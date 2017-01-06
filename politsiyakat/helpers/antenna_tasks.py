@@ -33,5 +33,5 @@ class antenna_tasks:
         pass
 
     @classmethod
-    def flag_excessive_delay_error(cls, msname="", bandpass_field=0):
-        print "stub, msname: %s" % msname
+    def flag_excessive_delay_error(cls, **kwargs):
+        print "stub, msname: %s" % kwargs["msname"]

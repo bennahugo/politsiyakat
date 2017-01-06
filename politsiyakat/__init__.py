@@ -83,10 +83,12 @@ def main(argv = None):
                         type=str,
                         help="Name of task to execute, for example flag_excessive_delay_error")
 
-    parser.add_argument("-a",
-                        "--kwargs",
+    parser.add_argument("kwargs",
+                        metavar="kwargs",
                         default="{}",
-                        type=json.loads)
+                        type=json.loads,
+                        help="JSON string containing keyword arguments to the task, for example "
+                             "'{\"msname\":\"helloworld.ms\"}'")
 
     args = parser.parse_args(argv)
 
@@ -100,5 +102,5 @@ def main(argv = None):
 
     run_func(**args.kwargs)
 
-    log.info("PolitskiaKAT terminated successfully")
+    log.info("PolitsiyaKAT terminated successfully")
     return 0

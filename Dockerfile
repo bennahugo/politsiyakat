@@ -18,5 +18,5 @@ ADD README.md /src/politsiyakat/README.md
 
 RUN pip install /src/politsiyakat
 
-ENTRYPOINT ["python -m politsiyakat"]
+ENTRYPOINT ["python", "-m", "politsiyakat"]
 CMD ["--help"]
