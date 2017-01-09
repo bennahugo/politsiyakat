@@ -69,8 +69,13 @@ class antenna_tasks:
 
     @classmethod
     def check_ms(cls, **kwargs):
+        """
+            Basic ms validity check
+        :param_kwargs:
+            "msname" : name of measurement set
+        """
         try:
-            ms = str(kwargs["ms"])
+            ms = str(kwargs["msname"])
         except:
             raise ValueError("check_ms (or any task that calls it) expects a "
                              "measurement set (key 'ms') as input")
@@ -95,19 +100,20 @@ class antenna_tasks:
             variance. This should catch any antennas that has issues like
             drive problems and digitizer reference timing problems.
         :param kwargs:
-            "ms" : name of measurement set
+            "msname" : name of measurement set
             "DATA" : name of data column
             "cal_field" : calibrator field number (preferably the bandpass calibrator)
             "valid_phase_range" : Phase range (in degrees) specified in the CASA range format
                                   'float~float'
-            "min_times" : Minimum number of timesteps to be invalid before a baseline
-                          is deemed untrustworthy
+            "max_invalid_timesteps" : Minimum number of timesteps to be invalid before a baseline
+                                      is deemed untrustworthy (as % of unflagged data)
+            "output_dir" : Where to dump diagnostic plots
         :post-conditions:
             Measurement set is reflagged to invalidate all baselines affected by
             severe phase error.
         """
         antenna_tasks.check_ms(**kwargs)
-        ms = str(kwargs["ms"])
+        ms = str(kwargs["msname"])
 
         try:
             DATA = str(kwargs["data_column"])
