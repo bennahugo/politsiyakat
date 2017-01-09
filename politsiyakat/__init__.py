@@ -18,12 +18,14 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+import os
+os.environ['MPLBACKEND'] = "Agg"
+
 import argparse
 import logging
 import sys
 from helpers.antenna_tasks import antenna_tasks
 import json
-import os
 from version import __version__
 import politsiyakat
 
@@ -34,10 +36,10 @@ __install_path = os.path.split(os.path.abspath(politsiyakat.__file__))[0]
 def create_logger():
     """ Creates a logger for this module """
 
-    logging.basicConfig(format="%(asctime)s:\t%(message)s")
+    logging.basicConfig(format="%(name)s - %(levelname)s %(asctime)s:\t%(message)s")
     logging.StreamHandler(sys.stdout)
     politsiya_log = logging.getLogger("politsiyakat")
-    politsiya_log.setLevel(logging.DEBUG)
+    politsiya_log.setLevel(logging.INFO)
     return politsiya_log
 
 log = create_logger()
