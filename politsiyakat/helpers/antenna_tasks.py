@@ -235,9 +235,12 @@ class antenna_tasks:
 
             baseline_flags = np.argwhere(
                 histogram_phase_off / (histogram_data + 0.000000001) > (max_times / 100.0))
-            for b in baseline_flags:
+
+            print np.count_nonzero(baseline_flags), baseline_flags.size
+
+            for bl, chan in baseline_flags:
                 politsiyakat.log.info("Baseline %d channel %d is deemed untrustworthy, will flag it" %
-                                      (b[0], b[1]))
+                                      (bl, chan))
 
             for chunk_i in xrange(nchunk):
                 politsiyakat.log.info("Flagging chunk %d / %d" % (chunk_i + 1, nchunk))
@@ -254,8 +257,8 @@ class antenna_tasks:
                               min(t.nrows() - (chunk_i * nrows_to_read),
                                   nrows_to_read))
                 baseline = baseline_index(a1, a2, nant)
-                for b in baseline_flags:
-                    flag[np.argwhere(baseline == b[0]), b[1]] = True
+                for bl, chan in baseline_flags:
+                    flag[np.argwhere(baseline == bl), chan % nchan] = True
                 t.putcol("FLAG",
                          flag,
                          chunk_i * nrows_to_read,
