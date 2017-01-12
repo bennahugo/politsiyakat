@@ -78,7 +78,7 @@ class antenna_tasks:
             ms = str(kwargs["msname"])
         except:
             raise ValueError("check_ms (or any task that calls it) expects a "
-                             "measurement set (key 'ms') as input")
+                             "measurement set (key 'msname') as input")
 
         if not os.path.isdir(ms):
             raise RuntimeError("Measurement set %s does not exist. Check input" % ms)
@@ -105,9 +105,16 @@ class antenna_tasks:
             "cal_field" : calibrator field number (preferably the bandpass calibrator)
             "valid_phase_range" : Phase range (in degrees) specified in the CASA range format
                                   'float~float'
-            "max_invalid_timesteps" : Minimum number of timesteps to be invalid before a baseline
-                                      is deemed untrustworthy (as % of unflagged data)
+            "max_invalid_datapoints" : Maximum number of data points (all
+                                       correlations over all time per baseline
+                                       channel) to be invalid before a baseline
+                                       is deemed untrustworthy (as % of
+                                       unflagged data for that baseline channel)
             "output_dir" : Where to dump diagnostic plots
+            "nrows_chunk" : Number of rows to read per chunk (reduces memory
+                            footprint
+            "simulate" : Only simulate and compute statistics, don't actually
+                         flag anything.
         :post-conditions:
             Measurement set is reflagged to invalidate all baselines affected by
             severe phase error.
@@ -139,16 +146,33 @@ class antenna_tasks:
                              "(key 'valid_phase_range') as input "
                              "with format 'float~float' in degrees.")
         try:
-            max_times = float(kwargs["max_invalid_timesteps"])
+            max_times = float(kwargs["max_invalid_datapoints"])
         except:
             raise ValueError("flag_excessive_delay_error expects a maximum invalid timesteps (\%) "
-                             "(key 'max_invalid_timesteps') as input")
+                             "(key 'max_invalid_datapoints') as input")
 
         try:
             output_dir = str(kwargs["output_dir"])
         except:
             raise ValueError("flag_excessive_delay_error expects an output_directory "
                              "(key 'output_dir') as input")
+        try:
+            nrows_to_read = int(kwargs["nrows_chunk"])
+        except:
+            raise ValueError("flag_excessive_delay_error expects number of rows to read per chunk "
+                             "(key 'nrows') as input")
+        try:
+            simulate = bool(kwargs["simulate"])
+            if simulate:
+                politsiyakat.log.warn("Warning: you specified you want to "
+                                      "simulate a flagging run. This means I "
+                                      "will compute statistics for you and "
+                                      "dump some diagnostics but not actually "
+                                      "touch your data.")
+
+        except:
+            raise ValueError("flag_excessive_delay_error expects simulate flag "
+                             "(key 'simulate') as input")
 
         with table(ms + "::SPECTRAL_WINDOW", readonly=True, ack=False) as t:
             nspw = t.nrows()
@@ -164,83 +188,107 @@ class antenna_tasks:
 
         with table(ms + "::ANTENNA", readonly=True, ack=False) as t:
             antenna_names = t.getcol("NAME")
+            antenna_positions = t.getcol("POSITION")
             nant = t.nrows()
+
+        # be conservative autocorrelations is probably still in the mix
+        # since they can be quite critical in calibration
+        no_baselines = (nant * (nant - 1)) // 2 + nant
+
+        # Antenna positions should be in some earth centric earth fixed frame
+        # which can be rotated to celestial horizon and then to uvw coordinates
+        # so I'm assuming this will be an okay estimate for uv dist (with no
+        # scaling by wavelength)
+        uv_dist_sq = np.zeros([no_baselines])
+        relative_position_a0 = antenna_positions - antenna_positions[0]
+        lbound = 0
+        bi = 0
+        for a0 in xrange(lbound, nant):
+            for a1 in xrange(a0, nant):
+                uv_dist_sq[bi] = a0**2 + a1**2 # Square Euclidian norm
+                bi += 1
+            lbound += 1
 
         with table(ms + "::POLARIZATION", readonly=True, ack=False) as t:
             ncorr = t.getcol("NUM_CORR")
-
         assert np.alltrue([ncorr[0] == ncorr[c] for c in xrange(len(ncorr))]), \
             "for now we can only handle rows that all have the same number correlations"
         ncorr = ncorr[0]
 
-        # be conservative autocorrelations is probably still in the mix
-        # since they're quite critical in calibration
-        no_baselines = (nant * (nant - 1)) // 2 + nant
-
         # Lets keep a histogram of each channel (all unflagged data)
         # and a corresponding histogram channels where phase is very wrong
-        histogram_data = np.zeros([no_baselines, nchan])
-        histogram_phase_off = np.zeros([no_baselines, nchan])
+        histogram_data = np.zeros([no_baselines, nchan * nspw])
+        histogram_phase_off = np.zeros([no_baselines, nchan * nspw])
 
         with table(ms, readonly=False, ack=False) as t:
             politsiyakat.log.info("Successfull read-write open of '%s'" % ms)
-            nrows_to_read = 1000
             nchunk = int(np.ceil(t.nrows() / float(nrows_to_read)))
 
             for chunk_i in xrange(nchunk):
-                for spw_i in xrange(nspw):
-                    politsiyakat.log.info("Computing histogram for chunk %d / %d" % (chunk_i + 1, nchunk))
-                    a1 = t.getcol("ANTENNA1",
-                                  chunk_i * nrows_to_read,
-                                  min(t.nrows() - (chunk_i * nrows_to_read),
-                                      nrows_to_read))
-                    a2 = t.getcol("ANTENNA2",
-                                  chunk_i * nrows_to_read,
-                                  min(t.nrows() - (chunk_i * nrows_to_read),
-                                      nrows_to_read))
-                    baseline = baseline_index(a1, a2, nant)
+                politsiyakat.log.info("Computing histogram for chunk %d / %d" %
+                                      (chunk_i + 1, nchunk))
+                a1 = t.getcol("ANTENNA1",
+                              chunk_i * nrows_to_read,
+                              min(t.nrows() - (chunk_i * nrows_to_read),
+                                  nrows_to_read))
+                a2 = t.getcol("ANTENNA2",
+                              chunk_i * nrows_to_read,
+                              min(t.nrows() - (chunk_i * nrows_to_read),
+                                  nrows_to_read))
+                baseline = baseline_index(a1, a2, nant)
 
-                    field = t.getcol("FIELD_ID",
-                                     chunk_i * nrows_to_read,
-                                     min(t.nrows() - (chunk_i * nrows_to_read),
-                                         nrows_to_read))
-                    data = t.getcol(DATA,
-                                    chunk_i * nrows_to_read,
-                                    min(t.nrows() - (chunk_i * nrows_to_read),
-                                        nrows_to_read))
-                    flag = t.getcol("FLAG",
-                                    chunk_i * nrows_to_read,
-                                    min(t.nrows() - (chunk_i * nrows_to_read),
-                                        nrows_to_read))
-                    desc = t.getcol("DATA_DESC_ID",
-                                    chunk_i * nrows_to_read,
-                                    min(t.nrows() - (chunk_i * nrows_to_read),
-                                        nrows_to_read))
-                    spw = map_descriptor_to_spw[desc]
+                field = t.getcol("FIELD_ID",
+                                 chunk_i * nrows_to_read,
+                                 min(t.nrows() - (chunk_i * nrows_to_read),
+                                     nrows_to_read))
+                data = t.getcol(DATA,
+                                chunk_i * nrows_to_read,
+                                min(t.nrows() - (chunk_i * nrows_to_read),
+                                    nrows_to_read))
+                flag = t.getcol("FLAG",
+                                 chunk_i * nrows_to_read,
+                                 min(t.nrows() - (chunk_i * nrows_to_read),
+                                     nrows_to_read))
+                desc = t.getcol("DATA_DESC_ID",
+                                chunk_i * nrows_to_read,
+                                min(t.nrows() - (chunk_i * nrows_to_read),
+                                    nrows_to_read))
+                spw = map_descriptor_to_spw[desc]
+
+                for spw_i in xrange(nspw):
                     unflagged_data = data * \
                                      np.logical_not(flag) * \
                                      np.tile(field == cal_field,
                                              (ncorr, nchan, 1)).T * \
                                      np.tile(spw == spw_i, (ncorr, nchan, 1)).T
+                    # Where there are any correlations are unflagged
+                    # consider the row unflagged
+                    S = ((unflagged_data != 0.0).sum(axis=2) > 0)
+                    # (nrows, nchan)
+                    histogram_data[baseline,
+                                   (nchan*spw_i):(nchan * (spw_i + 1))] +=\
+                        np.float32(S)
 
-                    histogram_data[baseline, (nchan*spw_i):(nchan * (spw_i + 1))] += \
-                        np.array([np.count_nonzero(unflagged_data[:, c, :]) for c in xrange(nchan)])
+                    # Where there are one or more of the correlations outside
+                    # valid phase range count
+                    ang = np.angle(unflagged_data)
+                    less = ang < np.deg2rad(low_valid_phase)
+                    more = ang > np.deg2rad(high_valid_phase)
+                    L = np.logical_and((np.logical_or(less, more).sum(axis=2) >
+                                        0), S)
+                    # (nrows, nchan, ncorr)
+                    histogram_phase_off[baseline,
+                                        (nchan*spw_i):(nchan * (spw_i + 1))] \
+                        += np.float32(L)
+            F = np.abs(histogram_phase_off / (histogram_data + 0.000000001)) > (max_times / 100.0)
+            F *= (histogram_data != 0)
+            no_channels_flagged_per_baseline = np.sum(F, axis=1)
+            flagged_baseline_channels = np.argwhere(F)
 
-                    histogram_phase_off[baseline, (nchan*spw_i):(nchan * (spw_i + 1))] += \
-                        np.array([np.count_nonzero(np.where((np.angle(unflagged_data[:, c, :]) <
-                                                             np.deg2rad(low_valid_phase)) |
-                                                            (np.angle(unflagged_data[:, c, :]) >
-                                                             np.deg2rad(high_valid_phase))))
-                                  for c in xrange(nchan)])
-
-            baseline_flags = np.argwhere(
-                histogram_phase_off / (histogram_data + 0.000000001) > (max_times / 100.0))
-
-            print np.count_nonzero(baseline_flags), baseline_flags.size
-
-            for bl, chan in baseline_flags:
-                politsiyakat.log.info("Baseline %d channel %d is deemed untrustworthy, will flag it" %
-                                      (bl, chan))
+            for bl_i, bl_sum in enumerate(no_channels_flagged_per_baseline):
+                politsiyakat.log.info("Baseline %d has %d untrustworthy "
+                                      "channels that was not previously "
+                                      "flagged." % (bl_i, bl_sum))
 
             for chunk_i in xrange(nchunk):
                 politsiyakat.log.info("Flagging chunk %d / %d" % (chunk_i + 1, nchunk))
@@ -257,44 +305,26 @@ class antenna_tasks:
                               min(t.nrows() - (chunk_i * nrows_to_read),
                                   nrows_to_read))
                 baseline = baseline_index(a1, a2, nant)
-                for bl, chan in baseline_flags:
+                for bl, chan in flagged_baseline_channels:
                     flag[np.argwhere(baseline == bl), chan % nchan] = True
-                t.putcol("FLAG",
-                         flag,
-                         chunk_i * nrows_to_read,
-                         min(t.nrows() - (chunk_i * nrows_to_read),
-                             nrows_to_read))
 
-            # Dump a diagnostic plot of the non-flagged data
+                # finally actually touch the measurement set
+                if not simulate:
+                    t.putcol("FLAG",
+                             flag,
+                             chunk_i * nrows_to_read,
+                             min(t.nrows() - (chunk_i * nrows_to_read),
+                                 nrows_to_read))
+
+            # Dump a diagnostic plot of the number of bad phase channels per
+            # baseline
             fig = plt.figure()
-            cm = plt.cm.get_cmap('cubehelix')
-            for c in xrange(histogram_data.shape[1]):
-                color = [c / float(histogram_data.shape[1])] * histogram_data.shape[0]
-                plt.scatter(np.arange(no_baselines),
-                            histogram_data[:, c].reshape([no_baselines]),
-                            s=1,
-                            c=color,
-                            cmap=cm)
-            plt.title("Unflagged data for " + os.path.basename(ms))
-            plt.xlabel("Baseline Index")
-            plt.ylabel("Number of unflagged data points")
-            fig.savefig(output_dir + "/unflagged_datapoints.field_%d.png" % cal_field)
+            ranked_uvdist_sq = np.argsort(uv_dist_sq)
+            plt.plot(np.sqrt(uv_dist_sq[ranked_uvdist_sq]),
+                     no_channels_flagged_per_baseline[ranked_uvdist_sq])
+            plt.title("Flag excessive phase error " + os.path.basename(ms))
+            plt.xlabel("UVdist (m)")
+            plt.ylabel("Number of bad previously unflagged channels")
+            fig.savefig(output_dir + "/flagged_channels_per_baseline.field_%d.png" % cal_field)
             plt.close(fig)
-
-            # Dump a diagnostic plot of out of bound phases
-            fig = plt.figure()
-            cm = plt.cm.get_cmap('cubehelix')
-            for c in xrange(histogram_data.shape[1]):
-                color = [c / float(histogram_data.shape[1])] * histogram_data.shape[0]
-            plt.scatter(np.arange(no_baselines),
-                        histogram_phase_off[:, c].reshape([no_baselines]),
-                        s=1,
-                        c=color,
-                        cmap=cm)
-            plt.title("Unflagged data for " + os.path.basename(ms))
-            plt.xlabel("Baseline Index")
-            plt.ylabel("Number of visibilities with invalid phase")
-            fig.savefig(output_dir + "/bad_phase_count.field_%d.png" % cal_field)
-            plt.close(fig)
-
 
