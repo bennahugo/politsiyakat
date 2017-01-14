@@ -160,7 +160,7 @@ class antenna_tasks:
             nrows_to_read = int(kwargs["nrows_chunk"])
         except:
             raise ValueError("flag_excessive_delay_error expects number of rows to read per chunk "
-                             "(key 'nrows') as input")
+                             "(key 'nrows_chunk') as input")
         try:
             simulate = bool(kwargs["simulate"])
             if simulate:
@@ -205,7 +205,8 @@ class antenna_tasks:
         bi = 0
         for a0 in xrange(lbound, nant):
             for a1 in xrange(a0, nant):
-                uv_dist_sq[bi] = a0**2 + a1**2 # Square Euclidian norm
+                uv_dist_sq[bi] = np.sum((relative_position_a0[a0] -
+                                         relative_position_a0[a1]) ** 2)
                 bi += 1
             lbound += 1
 
@@ -306,7 +307,7 @@ class antenna_tasks:
                                   nrows_to_read))
                 baseline = baseline_index(a1, a2, nant)
                 for bl, chan in flagged_baseline_channels:
-                    flag[np.argwhere(baseline == bl), chan % nchan] = True
+                    flag[np.argwhere(baseline == bl), chan % nchan, :] = True
 
                 # finally actually touch the measurement set
                 if not simulate:
@@ -325,6 +326,7 @@ class antenna_tasks:
             plt.title("Flag excessive phase error " + os.path.basename(ms))
             plt.xlabel("UVdist (m)")
             plt.ylabel("Number of bad previously unflagged channels")
-            fig.savefig(output_dir + "/flagged_channels_per_baseline.field_%d.png" % cal_field)
+            fig.savefig(output_dir + "%s-FLAGGED_PHASE_UVDIST.FIELD_%d.png" % 
+                        (os.path.basename(ms), cal_field))
             plt.close(fig)
 

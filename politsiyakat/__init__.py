@@ -102,7 +102,10 @@ def main(argv = None):
     if run_func is None:
         raise RuntimeError("Function %s is not part of suite %s" % (args.task, args.tasksuite))
 
-    run_func(**args.kwargs)
+    log.info("Running task '%s' with the following arguments:" % args.task)
+    for (key, val) in args.kwargs.iteritems():
+        log.info("\t%s:%s" % (key, val))
 
+    run_func(**args.kwargs)
     log.info("PolitsiyaKAT terminated successfully")
     return 0
