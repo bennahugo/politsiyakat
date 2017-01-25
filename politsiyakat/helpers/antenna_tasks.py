@@ -218,8 +218,8 @@ class antenna_tasks:
 
         # Lets keep a histogram of each channel (all unflagged data)
         # and a corresponding histogram channels where phase is very wrong
-        histogram_data = np.zeros([no_baselines, nchan * nspw])
-        histogram_phase_off = np.zeros([no_baselines, nchan * nspw])
+        histogram_data = np.zeros([no_baselines, nchan * nspw, ncorr])
+        histogram_phase_off = np.zeros([no_baselines, nchan * nspw, ncorr])
 
         with table(ms, readonly=False, ack=False) as t:
             politsiyakat.log.info("Successfull read-write open of '%s'" % ms)
@@ -262,20 +262,19 @@ class antenna_tasks:
                                      np.tile(field == cal_field,
                                              (ncorr, nchan, 1)).T * \
                                      np.tile(spw == spw_i, (ncorr, nchan, 1)).T
-                    # Where there are any correlations are unflagged
-                    # consider the row unflagged
-                    S = ((unflagged_data != 0.0).sum(axis=2) > 0)
+                    # Count all the places where there are unflagged correlations
+                    S = ((unflagged_data != 0.0) > 0)
                     # (nrows, nchan)
                     histogram_data[baseline,
                                    (nchan*spw_i):(nchan * (spw_i + 1))] +=\
                         np.float32(S)
 
-                    # Where there are one or more of the correlations outside
-                    # valid phase range count
+                    # Where there are some of the correlations outside
+                    # valid phase range count, count them
                     ang = np.angle(unflagged_data)
                     less = ang < np.deg2rad(low_valid_phase)
                     more = ang > np.deg2rad(high_valid_phase)
-                    L = np.logical_and((np.logical_or(less, more).sum(axis=2) >
+                    L = np.logical_and((np.logical_or(less, more) >
                                         0), S)
                     # (nrows, nchan, ncorr)
                     histogram_phase_off[baseline,
@@ -287,9 +286,9 @@ class antenna_tasks:
             flagged_baseline_channels = np.argwhere(F)
 
             for bl_i, bl_sum in enumerate(no_channels_flagged_per_baseline):
-                politsiyakat.log.info("Baseline %d has %d untrustworthy "
-                                      "channels that was not previously "
-                                      "flagged." % (bl_i, bl_sum))
+                politsiyakat.log.info("Baseline %d has %s untrustworthy "
+                                      "channels per correlation that was not previously "
+                                      "flagged." % (bl_i, ",".join([str(cnt) for cnt in bl_sum])))
 
             for chunk_i in xrange(nchunk):
                 politsiyakat.log.info("Flagging chunk %d / %d" % (chunk_i + 1, nchunk))
@@ -306,8 +305,8 @@ class antenna_tasks:
                               min(t.nrows() - (chunk_i * nrows_to_read),
                                   nrows_to_read))
                 baseline = baseline_index(a1, a2, nant)
-                for bl, chan in flagged_baseline_channels:
-                    flag[np.argwhere(baseline == bl), chan % nchan, :] = True
+                for bl, chan, corr in flagged_baseline_channels:
+                    flag[np.argwhere(baseline == bl), chan % nchan, corr] = True
 
                 # finally actually touch the measurement set
                 if not simulate:
@@ -319,14 +318,15 @@ class antenna_tasks:
 
             # Dump a diagnostic plot of the number of bad phase channels per
             # baseline
-            fig = plt.figure()
-            ranked_uvdist_sq = np.argsort(uv_dist_sq)
-            plt.plot(np.sqrt(uv_dist_sq[ranked_uvdist_sq]),
-                     no_channels_flagged_per_baseline[ranked_uvdist_sq])
-            plt.title("Flag excessive phase error " + os.path.basename(ms))
-            plt.xlabel("UVdist (m)")
-            plt.ylabel("Number of bad previously unflagged channels")
-            fig.savefig(output_dir + "%s-FLAGGED_PHASE_UVDIST.FIELD_%d.png" % 
-                        (os.path.basename(ms), cal_field))
-            plt.close(fig)
+            for c in xrange(ncorr):
+                fig = plt.figure()
+                ranked_uvdist_sq = np.argsort(uv_dist_sq)
+                plt.plot(np.sqrt(uv_dist_sq[ranked_uvdist_sq]),
+                         no_channels_flagged_per_baseline[ranked_uvdist_sq, c])
+                plt.title(("Flag excessive phase error (corr %d) " % c) + os.path.basename(ms))
+                plt.xlabel("UVdist (m)")
+                plt.ylabel("Number of bad previously unflagged channels")
+                fig.savefig(output_dir + "%s-FLAGGED_PHASE_UVDIST.FIELD_%d.CORR_%d.png" %
+                            (os.path.basename(ms), cal_field, c))
+                plt.close(fig)
 
