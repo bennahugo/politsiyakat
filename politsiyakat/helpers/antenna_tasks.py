@@ -218,8 +218,10 @@ class antenna_tasks:
 
         # Lets keep a histogram of each channel (all unflagged data)
         # and a corresponding histogram channels where phase is very wrong
-        histogram_data = np.zeros([no_baselines, nchan * nspw, ncorr])
-        histogram_phase_off = np.zeros([no_baselines, nchan * nspw, ncorr])
+        histogram_data = np.zeros([no_baselines, nchan * nspw, ncorr],
+                                  dtype=np.float64)
+        histogram_phase_off = np.zeros([no_baselines, nchan * nspw, ncorr],
+                                       dtype=np.float64)
 
         with table(ms, readonly=False, ack=False) as t:
             politsiyakat.log.info("Successfull read-write open of '%s'" % ms)
@@ -237,7 +239,6 @@ class antenna_tasks:
                               min(t.nrows() - (chunk_i * nrows_to_read),
                                   nrows_to_read))
                 baseline = baseline_index(a1, a2, nant)
-
                 field = t.getcol("FIELD_ID",
                                  chunk_i * nrows_to_read,
                                  min(t.nrows() - (chunk_i * nrows_to_read),
@@ -258,17 +259,17 @@ class antenna_tasks:
 
                 for spw_i in xrange(nspw):
                     unflagged_data = data * \
-                                     np.logical_not(flag) * \
+                                     np.float64(np.logical_not(flag)) * \
                                      np.tile(field == cal_field,
                                              (ncorr, nchan, 1)).T * \
                                      np.tile(spw == spw_i, (ncorr, nchan, 1)).T
                     # Count all the places where there are unflagged correlations
-                    S = ((unflagged_data != 0.0) > 0)
+                    S = (unflagged_data != 0.0)
                     # (nrows, nchan)
-                    histogram_data[baseline,
-                                   (nchan*spw_i):(nchan * (spw_i + 1))] +=\
-                        np.float32(S)
-
+                    for r in xrange(len(S)):
+                        histogram_data[baseline[r],
+                                       (nchan*spw_i):(nchan * (spw_i + 1))] +=\
+                            np.float64(S[r])
                     # Where there are some of the correlations outside
                     # valid phase range count, count them
                     ang = np.angle(unflagged_data)
@@ -277,9 +278,10 @@ class antenna_tasks:
                     L = np.logical_and((np.logical_or(less, more) >
                                         0), S)
                     # (nrows, nchan, ncorr)
-                    histogram_phase_off[baseline,
-                                        (nchan*spw_i):(nchan * (spw_i + 1))] \
-                        += np.float32(L)
+                    for r in xrange(len(S)):
+                        histogram_phase_off[baseline[r],
+                                            (nchan*spw_i):(nchan * (spw_i + 1))] \
+                            += np.float64(L[r])
             F = np.abs(histogram_phase_off / (histogram_data + 0.000000001)) > (max_times / 100.0)
             F *= (histogram_data != 0)
             no_channels_flagged_per_baseline = np.sum(F, axis=1)
@@ -289,7 +291,6 @@ class antenna_tasks:
                 politsiyakat.log.info("Baseline %d has %s untrustworthy "
                                       "channels per correlation that was not previously "
                                       "flagged." % (bl_i, ",".join([str(cnt) for cnt in bl_sum])))
-
             for chunk_i in xrange(nchunk):
                 politsiyakat.log.info("Flagging chunk %d / %d" % (chunk_i + 1, nchunk))
                 flag = t.getcol("FLAG",
