@@ -23,6 +23,7 @@ import numpy as np
 import politsiyakat
 import re
 from matplotlib import pyplot as plt
+import matplotlib as mpl
 import matplotlib.cm as cm
 from concurrent.futures.thread import ThreadPoolExecutor
 import multiprocessing
@@ -57,6 +58,33 @@ def baseline_index(a1, a2, no_antennae):
 
     return (slow_index * (-slow_index + (2 * no_antennae + 1))) // 2 + \
         np.abs(a1 - a2)
+
+def uv_dist_per_baseline(no_baselines, nant, antenna_positions):
+    """
+    Given antenna positions in an earth centric earth fixed frame
+    compute the unscaled uv distance per baseline
+    :param no_baselines: Number of baselines
+    :param nant: Number of antennae
+    :param antenna_positions: array of [X,Y,Z] ITRS antenna positions
+                              as found in a MS ANTENNA table
+    return array of uv distances per unique baseline index
+    """
+    # Antenna positions should be in some earth centric earth fixed frame
+    # which can be rotated to celestial horizon and then to uvw coordinates
+    # so I'm assuming this will be an okay estimate for uv dist (with no
+    # scaling by wavelength)
+    uv_dist_sq = np.zeros([no_baselines])
+    relative_position_a0 = antenna_positions - antenna_positions[0]
+    lbound = 0
+    bi = 0
+    for a0 in xrange(lbound, nant):
+        for a1 in xrange(a0, nant):
+            uv_dist_sq[bi] = np.sum((relative_position_a0[a0] -
+                                     relative_position_a0[a1]) ** 2)
+            bi += 1
+        lbound += 1
+    return np.sqrt(uv_dist_sq)
+
 
 class antenna_tasks:
     """
@@ -275,6 +303,7 @@ class antenna_tasks:
                                         to be invalid before a baseline
                                         is deemed untrustworthy (as fraction of
                                         unflagged data for that baseline channel)
+            "output_dir"  : Name of output dir where to dump diagnostic plots
 
 
         :post conditions:
@@ -304,6 +333,9 @@ class antenna_tasks:
             raise ValueError("flag_amplitude_drifts expects calibrator field(s) (key "
                              "'cal_field') as input")
 
+        if not set(cal_fields).issubset(set(fields)):
+            raise ValueError("Calibrator fields must be subset of fields "
+                             "that must be flagged.")
         try:
             max_amp_frac_clip = float(kwargs["amp_frac_clip"])
         except:
@@ -359,6 +391,12 @@ class antenna_tasks:
             nthreads=multiprocessing.cpu_count()
             politsiyakat.log.warn("nthreads not specified. I will use %d "
                                   "threads" % nthreads)
+        try:
+            output_dir = str(kwargs["output_dir"])
+        except:
+            raise ValueError("flag_amplitude_drifts expects an output_directory "
+                             "(key 'output_dir') as input")
+
 
         source_names = [ms_meta["ms_field_names"][f] for f in fields]
         nchan = ms_meta["nchan"]
@@ -369,7 +407,7 @@ class antenna_tasks:
         no_baselines = ms_meta["no_baselines"]
         ncorr = ms_meta["ncorr"]
         nchunk = ms_meta["nchunk"]
-
+        antenna_positions = ms_meta["antenna_positions"]
         politsiyakat.log.info("Will flag the following fields:")
         for fi, f in enumerate(fields):
             politsiyakat.log.info("\t(%d): %s" % (f, source_names[fi]) +
@@ -378,8 +416,8 @@ class antenna_tasks:
         executor = ThreadPoolExecutor(max_workers=nthreads)
 
         source_scan_info = {}
-
-        for chunk_i in xrange(12, nchunk):
+        obs_start = None
+        for chunk_i in xrange(nchunk):
             politsiyakat.log.info("Processing chunk %d of %d..." %
                 (chunk_i + 1, nchunk))
             politsiyakat.log.info("\tReading MS")
@@ -396,6 +434,8 @@ class antenna_tasks:
             spw = maintable_chunk["spw"]
             scan = maintable_chunk["scan"]
             time = maintable_chunk["time"]
+            obs_start = min(obs_start, np.min(time)) \
+                if obs_start is not None else np.min(time)
 
             for field_i, field_id in enumerate(fields):
                 politsiyakat.log.info("\tProcessing field %s (total %d fields)"
@@ -559,16 +599,16 @@ class antenna_tasks:
                             if not simulate:
                                 flag = pf
 
-                    # Write flagged of the calibrators back to the ms
-                    if not simulate:
-                        politsiyakat.log.info("\t\t\tWriting phase clip flags "
-                                              "of calibrator to MS")
-                        with table(ms, readonly=True, ack=False) as t:
-                            t.putcol("FLAG",
-                                     flag,
-                                     chunk_i * nrows_to_read,
-                                     min(t.nrows() - (chunk_i * nrows_to_read),
-                                         nrows_to_read))
+            # Write flags of the calibrators back to the ms
+            if not simulate:
+                politsiyakat.log.info("\tWriting phase clip flags "
+                                      "of calibrators to MS")
+                with table(ms, readonly=False, ack=False) as t:
+                    t.putcol("FLAG",
+                             flag,
+                             chunk_i * nrows_to_read,
+                             min(t.nrows() - (chunk_i * nrows_to_read),
+                                 nrows_to_read))
 
         politsiyakat.log.info("Looking for baselines with general phase error "
                               "across all calibrator scans...")
@@ -617,7 +657,7 @@ class antenna_tasks:
 
         # Clip baselines per channel and correlation in scans that
         # are well above the median over all scans
-        for field_id in fields:
+        for field_i, field_id in enumerate(fields):
             politsiyakat.log.info("Doing interscan comparisons for field "
                                   "%s (total %d fields)" %
                                   (source_names[field_i], no_fields))
@@ -655,6 +695,7 @@ class antenna_tasks:
 
                 politsiyakat.log.info("\tNumber of clipped phases "
                                       "of scan %d:" % s)
+
                 for ci in xrange(ncorr):
                     clipped_vis_count = \
                         source_scan_info\
@@ -679,9 +720,11 @@ class antenna_tasks:
             # for both calibrator and target fields
             for s in scan_list:
                 politsiyakat.log.info("\tComparing baseline amplitudes between "
-                                      "scans for this field (total "
+                                      "scan %d and other scans for field %s (total "
                                       "%d scans)" %
-                                      (len(scan_list)))
+                                      (s,
+                                       source_names[field_i],
+                                       len(scan_list)))
                 hot_bl_scan = \
                     (source_scan_info[field_id][s]["mean_power"] >
                      (1 + max_amp_frac_clip) * median_scan_power)
@@ -732,7 +775,8 @@ class antenna_tasks:
 
             if field_id in cal_fields:
                 politsiyakat.log.info("\tComparing baseline amplitudes across "
-                                      "baseline in this calibrator field")
+                                      "baseline in calibrator field %s" %
+                                      source_names[fields.index(field_id)])
                 hot_cold_found = False
 
                 for bi in xrange(no_baselines):
@@ -802,8 +846,8 @@ class antenna_tasks:
 
         clip_baseline_phases_amps = np.logical_or(clip_baselines_phases,
                                                   clip_baselines_amps)
-        for chunk_i in xrange(11, nchunk):
-            politsiyakat.log.info("Processing chunk %d of %d..." %
+        for chunk_i in xrange(nchunk):
+            politsiyakat.log.info("Applying flags in chunk %d of %d..." %
                 (chunk_i + 1, nchunk))
             politsiyakat.log.info("\tReading MS")
             kwargs["chunk_id"] = chunk_i
@@ -824,9 +868,186 @@ class antenna_tasks:
                 # that had general phase and amplitude
                 # errors accross all calibrator scans
                 flagged_baselines = np.argwhere(clip_baseline_phases_amps)
-                for (bi, ch_i, corr_i) in flagged_baselines:
-                    bl_rows = np.argwhere(baseline == bi)
-                    flag[bl_rows][ch_i, corr_i] = True
+                for spw_i in xrange(nspw):
+                    for (bi, ch_i, corr_i) in flagged_baselines:
+                        apply_rows = \
+                            np.argwhere(np.logical_and(baseline == bi,
+                                                       spw == spw_i))
+                        flag[apply_rows, ch_i % nchan, corr_i] = True
+
+                # if the source is a calibrator we can also flag out
+                # times where individual baseline channels drifted 
+                # from the median power for that channel accross
+                # all scans
+                if source_scan_info[field_id]["is_calibrator"]:
+                    flagged_baselines = np.argwhere(np.logical_or(
+                        source_scan_info[field_id]["hot_baseline_count"] > 0,
+                        source_scan_info[field_id]["cold_baseline_count"] > 0))
+                    for spw_i in xrange(nspw):
+                        for (bi, ch_i, corr_i) in flagged_baselines:
+                            apply_rows = \
+                                np.argwhere(np.logical_and(baseline == bi,
+                                                           spw == spw_i))
+                            flag[apply_rows, ch_i % nchan, corr_i] = True
+
+                # The scan-based phase clips were already applied to the
+                # calibrators during power calculations, all that remains 
+                # is to apply scan-based amplitude flags per baseline, 
+                # channel and correlation
+                scan_list = [k for k in source_scan_info[field_id]
+                             if isinstance(k, int)]
+                for s in scan_list:
+                    flagged_baselines = np.argwhere(np.logical_or(
+                        source_scan_info[field_id][s]["hot_bl_scan"] > 0,
+                        source_scan_info[field_id][s]["cold_bl_scan"] > 0))
+                    for spw_i in xrange(nspw):
+                        for (bi, ch_i, corr_i) in flagged_baselines:
+                            apply_rows = \
+                                np.argwhere(np.logical_and(np.logical_and(
+                                    baseline == bi,
+                                    spw == spw_i),
+                                    scan == s))
+                            flag[apply_rows, ch_i % nchan, corr_i] = True
+
+            # Write flags of the fields and scans back to the ms
+            if not simulate:
+                politsiyakat.log.info("\t\tWriting field to MS")
+                with table(ms, readonly=False, ack=False) as t:
+                    t.putcol("FLAG",
+                             flag,
+                             chunk_i * nrows_to_read,
+                             min(t.nrows() - (chunk_i * nrows_to_read),
+                                 nrows_to_read))
+
+        uv_dist = uv_dist_per_baseline(no_baselines,
+                                       nant,
+                                       antenna_positions)
+
+        # Dump a diagnostic plot of the number of bad phase channels per
+        # baseline
+        for c in xrange(ncorr):
+            fig = plt.figure()
+            ranked_uv_dist = np.argsort(uv_dist)
+            plt.plot(uv_dist[ranked_uv_dist],
+                     histogram_percentage_chan_bl_phase_off[ranked_uv_dist, c])
+            plt.title(("Flag excessive phase error (corr %d) " % c) + os.path.basename(ms))
+            plt.xlabel("UVdist (m)")
+            plt.ylabel("Number of bad previously unflagged channels")
+            fig.savefig(output_dir + "%s-FLAGGED_PHASE_UVDIST.OBSWIDE.CORR_%d.png" %
+                        (os.path.basename(ms),
+                         c))
+
+            plt.close(fig)
+
+        # Dump a diagnostic plot of the number of bad amplitude channels per
+        # baseline
+        for c in xrange(ncorr):
+            fig = plt.figure()
+            ranked_uv_dist = np.argsort(uv_dist)
+            plt.plot(uv_dist[ranked_uv_dist],
+                     histogram_percentage_chan_bl_amp_off[ranked_uv_dist, c])
+            plt.title(("Flag excessive amplitude error (corr %d) " % c) + os.path.basename(ms))
+            plt.xlabel("UVdist (m)")
+            plt.ylabel("Number of bad previously unflagged channels")
+            fig.savefig(output_dir + "%s-FLAGGED_AMP_UVDIST.OBSWIDE.CORR_%d.png" %
+                        (os.path.basename(ms),
+                         c))
+            plt.close(fig)
+
+        # Dump diagnostic plots of the number of amplitude and phase clips applied per
+        # calibrator field
+        for field_i, field_id in enumerate(fields):
+            if not source_scan_info[field_id]["is_calibrator"]:
+                continue
+            hist_hot = np.sum(source_scan_info
+                                [field_id]["hot_baseline_count"] > 0,
+                              axis=1)
+            hist_cold = np.sum(source_scan_info
+                                [field_id]["cold_baseline_count"] > 0,
+                               axis=1)
+            for c in xrange(ncorr):
+                fig = plt.figure()
+                ranked_uv_dist = np.argsort(uv_dist)
+                plt.plot(uv_dist[ranked_uv_dist],
+                         hist_cold[ranked_uv_dist,c],
+                         "b", label="#Cold channels")
+                plt.plot(np.sqrt(uv_dist[ranked_uv_dist]),
+                         hist_hot[ranked_uv_dist,c],
+                         "r", label="#Hot channels")
+                plt.title(("Clip baseline amp offset (corr %d, field"
+                          " %s) " % (c, source_names[field_i])) + os.path.basename(ms))
+                plt.xlabel("UVdist (m)")
+                plt.ylabel("Number of bad previously unflagged channels")
+                plt.legend()
+                fig.savefig(output_dir + "%s-FLAGGED_AMP_UVDIST.CALFIELD_%s.CORR_%d.png" %
+                            (os.path.basename(ms),
+                             field_id,
+                             c))
+                plt.close(fig)
+            total_phase_clip = np.zeros([no_baselines,
+                                         nchan,
+                                         ncorr])
+            scan_list = [k for k in source_scan_info[field_id]
+                         if isinstance(k, int)]
+            for s in scan_list:
+                # (nbl, nchan, ncorr)
+                total_phase_clip += source_scan_info[field_id][s]["num_phase_error"]
+            # (nchan, ncorr)
+            hist_phase_clip = np.sum(total_phase_clip > 0,
+                                     axis=1)
+            for c in xrange(ncorr):
+                fig = plt.figure()
+                ranked_uv_dist = np.argsort(uv_dist)
+                plt.plot(uv_dist[ranked_uv_dist],
+                         hist_phase_clip[ranked_uv_dist,c])
+                plt.title(("Clip calibrator channels due to phase (corr %d, field"
+                          " %s) " % (c, source_names[field_i])) + os.path.basename(ms))
+                plt.xlabel("UVdist (m)")
+                plt.ylabel("Number of bad previously unflagged channels")
+                fig.savefig(output_dir + "%s-FLAGGED_PHASE_UVDIST.CALFIELD_%s.CORR_%d.png" %
+                            (os.path.basename(ms),
+                             field_id,
+                             c))
+                plt.close(fig)
+
+        # Dump diagnostic plots of the amplitude clips done per scan
+        # (intra-baseline basis)
+        for field_i, field_id in enumerate(fields):
+            scan_list = [k for k in source_scan_info[field_id]
+                         if isinstance(k, int)]
+            for c in xrange(ncorr):
+                fig = plt.figure()
+                cmcool = plt.get_cmap("cool")
+                for s in scan_list:
+                    s_start = source_scan_info\
+                                        [field_id][s]["scan_start"]
+                    s_end = source_scan_info\
+                                        [field_id][s]["scan_end"]
+                    s_mid = s_start + (s_end - s_end) * 0.5 - obs_start
+                    hist_amp = np.sum((source_scan_info
+                                        [field_id][s]["hot_bl_scan"] +
+                                      source_scan_info
+                                        [field_id][s]["cold_bl_scan"]) > 0,
+                                      axis=1)
+                    for bl in xrange(no_baselines):
+                        plt.scatter(np.repeat(s_mid, no_baselines),
+                                    hist_amp[:, c],
+                                    c=np.repeat(uv_dist[bl], no_baselines),
+                                    vmin=np.min(uv_dist),
+                                    vmax=np.max(uv_dist),
+                                    cmap=cmcool)
+                plt.colorbar()
+                plt.title(("Flagged amp time fluctuations (col:uvdist, "
+                           "corr %d, field %s) " % (c, source_names[field_i])) +
+                          os.path.basename(ms))
+                plt.xlabel("Time")
+                plt.ylabel("Number of bad previously unflagged channels")
+                fig.savefig(output_dir +
+                            "%s-FLAGGED_AMP_SCAN.FIELD_%s.CORR_%d.png" %
+                            (os.path.basename(ms),
+                             field_id,
+                             c))
+                plt.close(fig)
 
         executor.shutdown()
 
@@ -933,21 +1154,6 @@ class antenna_tasks:
         # since they can be quite critical in calibration
         no_baselines = (nant * (nant - 1)) // 2 + nant
 
-        # Antenna positions should be in some earth centric earth fixed frame
-        # which can be rotated to celestial horizon and then to uvw coordinates
-        # so I'm assuming this will be an okay estimate for uv dist (with no
-        # scaling by wavelength)
-        uv_dist_sq = np.zeros([no_baselines])
-        relative_position_a0 = antenna_positions - antenna_positions[0]
-        lbound = 0
-        bi = 0
-        for a0 in xrange(lbound, nant):
-            for a1 in xrange(a0, nant):
-                uv_dist_sq[bi] = np.sum((relative_position_a0[a0] -
-                                         relative_position_a0[a1]) ** 2)
-                bi += 1
-            lbound += 1
-
         with table(ms + "::POLARIZATION", readonly=True, ack=False) as t:
             ncorr = t.getcol("NUM_CORR")
         assert np.alltrue([ncorr[0] == ncorr[c] for c in xrange(len(ncorr))]), \
@@ -1044,8 +1250,16 @@ class antenna_tasks:
                               min(t.nrows() - (chunk_i * nrows_to_read),
                                   nrows_to_read))
                 baseline = baseline_index(a1, a2, nant)
-                for bl, chan, corr in flagged_baseline_channels:
-                    flag[np.argwhere(baseline == bl), chan % nchan, corr] = True
+                desc = t.getcol("DATA_DESC_ID",
+                                chunk_i * nrows_to_read,
+                                min(t.nrows() - (chunk_i * nrows_to_read),
+                                    nrows_to_read))
+                spw = map_descriptor_to_spw[desc]
+                for spw_i in xrange(nspw):
+                    for bl, chan, corr in flagged_baseline_channels:
+                        affected_rows = np.argwhere(np.logical_and(baseline == bl,
+                                                                   spw == spw_i))
+                        flag[affected_rows, chan % nchan, corr] = True
 
                 # finally actually touch the measurement set
                 if not simulate:
@@ -1057,11 +1271,14 @@ class antenna_tasks:
 
             # Dump a diagnostic plot of the number of bad phase channels per
             # baseline
+            uv_dist = uv_dist_per_baseline(no_baselines,
+                                           nant,
+                                           antenna_positions)
             for c in xrange(ncorr):
                 fig = plt.figure()
-                ranked_uvdist_sq = np.argsort(uv_dist_sq)
-                plt.plot(np.sqrt(uv_dist_sq[ranked_uvdist_sq]),
-                         no_channels_flagged_per_baseline[ranked_uvdist_sq, c])
+                ranked_uv_dist = np.argsort(uv_dist)
+                plt.plot(uv_dist[ranked_uv_dist],
+                         no_channels_flagged_per_baseline[ranked_uv_dist, c])
                 plt.title(("Flag excessive phase error (corr %d) " % c) + os.path.basename(ms))
                 plt.xlabel("UVdist (m)")
                 plt.ylabel("Number of bad previously unflagged channels")
