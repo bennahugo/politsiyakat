@@ -420,8 +420,8 @@ class antenna_tasks:
         antenna_positions = ms_meta["antenna_positions"]
         politsiyakat.log.info("Will flag the following fields:")
         for fi, f in enumerate(fields):
-            politsiyakat.log.info("\t(%d): %s" % (f, source_names[fi]) +
-                                  " (calibrator)" if f in cal_fields else "")
+            politsiyakat.log.info("\t(%d): %s" % (f, source_names[fi]) +(
+                                  " (calibrator)" if f in cal_fields else ""))
 
         executor = ThreadPoolExecutor(max_workers=nthreads)
 
@@ -455,18 +455,14 @@ class antenna_tasks:
                         "is_calibrator": (field_id in cal_fields),
                     }
                 source_rows = np.argwhere(field == field_id)
-                source_scans = scan[source_rows]
-                if len(source_rows) == 0:
+                source_scans = np.unique(scan[source_rows])
+                if source_scans.size == 0:
                     politsiyakat.log.info("\t\tNo source scans found in this chunk.")
                     continue
-
-                max_source_scan = np.max(source_scans)
-                min_source_scan = np.min(source_scans)
                 politsiyakat.log.info("\t\tFound %d scans for this field in"
                                       " the chunk:"
-                                      % (max_source_scan -
-                                         min_source_scan + 1))
-                for s in xrange(min_source_scan, max_source_scan + 1):
+                                      % source_scans.size)
+                for s in source_scans:
                     scan_rows = np.argwhere(scan == s)
                     scan_start = np.min(time[scan_rows])
                     scan_end = np.max(time[scan_rows])
@@ -565,7 +561,7 @@ class antenna_tasks:
                                         np.count_nonzero(L, axis=0)
                                 else:
                                     pf = flag.view()
-                                    count_pf = np.zeros(nchan, ncorr)
+                                    count_pf = np.zeros([nchan, ncorr])
 
                                 return (count_unflagged,
                                         count_total,
@@ -1071,13 +1067,13 @@ class antenna_tasks:
         :param kwargs:
             "msname" : name of measurement set
             "data_column" : name of data column
-            "field" : Comma-seperated list of no_fields
+            "field" : Comma-seperated list of fields
             "cal_field" : calibrator field number(s), comma-seperated
             "phase_range_clip" : Valid calibrator phase range (in degrees)
                                  specified in the CASA range format
                                   'float~float'
             "invalid_count_frac_clip" : Maximum number of data points (per
-                                        correlation per channel per baseline) 
+                                        correlation per channel per baseline)
                                         to be invalid before a baseline
                                         is deemed untrustworthy (as fraction of
                                         unflagged data for that baseline channel)
@@ -1174,8 +1170,8 @@ class antenna_tasks:
         antenna_positions = ms_meta["antenna_positions"]
         politsiyakat.log.info("Will flag the following fields:")
         for fi, f in enumerate(fields):
-            politsiyakat.log.info("\t(%d): %s" % (f, source_names[fi]) +
-                                  " (calibrator)" if f in cal_fields else "")
+            politsiyakat.log.info("\t(%d): %s" % (f, source_names[fi]) +(
+                                  " (calibrator)" if f in cal_fields else ""))
 
         # Lets keep a histogram of each channel (all unflagged data)
         # and a corresponding histogram channels where phase is very wrong
@@ -1183,7 +1179,6 @@ class antenna_tasks:
                                   dtype=np.float64)
         histogram_phase_off = np.zeros([no_baselines, nchan * nspw, ncorr],
                                        dtype=np.float64)
-
         for chunk_i in xrange(nchunk):
             politsiyakat.log.info("Computing histogram for chunk %d / %d" %
                                   (chunk_i + 1, nchunk))
@@ -1206,8 +1201,8 @@ class antenna_tasks:
                                  (ncorr, nchan, 1)).T
                 for field_i, field_id in enumerate(cal_fields):
                     politsiyakat.log.info("\tProcessing field %s (%d calibrator"
-                                          " fields in total" %
-                                          (source_names[field_i],
+                                          " fields in total)" %
+                                          (source_names[fields.index(field_id)],
                                            len(cal_fields)))
                     unflagged_data = data * \
                                      np.logical_not(flag) * \
@@ -1237,77 +1232,221 @@ class antenna_tasks:
                                             (nchan*spw_i):(nchan * (spw_i + 1))] \
                             += L[r]
 
-            # As fraction bigger than tolerated fraction
-            F = np.abs(histogram_phase_off /
-                       (histogram_data + 0.000000001)) > max_inv_vis
-            F *= (histogram_data != 0)
-            no_channels_flagged_per_baseline = np.sum(F, axis=1)
-            flagged_baseline_channels = np.argwhere(F)
-            politsiyakat.log.info("Looking for baselines with general phase error "
-                                  "across all calibrator fields...")
-            flagged_bls_on_phase = False
-            for bi in np.argwhere(no_channels_flagged_per_baseline > 0):
-                politsiyakat.log.info("\tBaseline %d has %s untrustworthy "
-                                      "channels per correlation that were not previously "
-                                      "flagged." %
-                    (bi,
-                     ",".join([str(cnt) for cnt in
-                               no_channels_flagged_per_baseline[bi]])))
-                flagged_bls_on_phase = True
-            if not flagged_bls_on_phsae:
-                politsiyakat.log.info("\tDid not find any baselines with "
-                                      "significant overall phase drifts "
-                                      "when comparing across all "
-                                      "calibrator scans")
-            for chunk_i in xrange(nchunk):
-                politsiyakat.log.info("Applying flags for chunk %d / %d" %
-                                      (chunk_i + 1, nchunk))
-                politsiyakat.log.info("\tReading MS")
-                kwargs["chunk_id"] = chunk_i
-                kwargs["ack"] = False
-                kwargs["read_exclude"] = ["data", "scan", "time"]
-                maintable_chunk = antenna_tasks.read_ms_maintable_chunk(**kwargs)
-                a1 = maintable_chunk["a1"]
-                a2 = maintable_chunk["a2"]
-                baseline = maintable_chunk["baseline"]
-                field = maintable_chunk["field"]
-                flag = maintable_chunk["flag"]
-                desc = maintable_chunk["desc"]
-                spw = maintable_chunk["spw"]
-                # Apply flags to all fields, including calibrators
-                for spw_i in xrange(nspw):
-                    for field_i, field_id in enumerate(fields):
-                        in_spw_field = np.logical_and(spw == spw_i,
-                                                      field == field_id)
-                        for bl, chan, corr in flagged_baseline_channels:
-                            affected_rows = \
-                                np.argwhere(np.logical_and(baseline == bl,
-                                                           in_spw_field))
-                            flag[affected_rows, chan % nchan, corr] = True
+        # As fraction bigger than tolerated fraction
+        F = np.abs(histogram_phase_off /
+                   (histogram_data + 0.000000001)) > max_inv_vis
+        F *= (histogram_data != 0)
+        no_channels_flagged_per_baseline = np.sum(F, axis=1)
+        flagged_baseline_channels = np.argwhere(F)
+        politsiyakat.log.info("Looking for baselines with general phase error "
+                              "across all calibrator fields...")
+        flagged_bls_on_phase = False
+        for bi in np.argwhere(np.sum(no_channels_flagged_per_baseline, axis=1) > 0):
+            politsiyakat.log.info("\tBaseline %d has %s untrustworthy "
+                                  "channels per correlation that were not previously "
+                                  "flagged." %
+                (bi,
+                 ",".join([str(cnt) for cnt in
+                           no_channels_flagged_per_baseline[bi]])))
+            flagged_bls_on_phase = True
+        if not flagged_bls_on_phase:
+            politsiyakat.log.info("\tDid not find any baselines with "
+                                  "significant overall phase drifts "
+                                  "when comparing across all "
+                                  "calibrator scans")
 
-                # finally actually touch the measurement set
-                if not simulate:
-                    politsiyakat.log.info("\tWriting flags to MS")
+        for chunk_i in xrange(nchunk):
+            politsiyakat.log.info("Applying flags for chunk %d / %d" %
+                                  (chunk_i + 1, nchunk))
+            politsiyakat.log.info("\tReading MS")
+            kwargs["chunk_id"] = chunk_i
+            kwargs["ack"] = False
+            kwargs["read_exclude"] = ["data", "scan", "time"]
+            maintable_chunk = antenna_tasks.read_ms_maintable_chunk(**kwargs)
+            a1 = maintable_chunk["a1"]
+            a2 = maintable_chunk["a2"]
+            baseline = maintable_chunk["baseline"]
+            field = maintable_chunk["field"]
+            flag = maintable_chunk["flag"]
+            desc = maintable_chunk["desc"]
+            spw = maintable_chunk["spw"]
+            # Apply flags to all fields, including calibrators
+            for spw_i in xrange(nspw):
+                for field_i, field_id in enumerate(fields):
+                    in_spw_field = np.logical_and(spw == spw_i,
+                                                  field == field_id)
+                    for bl, chan, corr in flagged_baseline_channels:
+                        affected_rows = \
+                            np.argwhere(np.logical_and(baseline == bl,
+                                                       in_spw_field))
+                        flag[affected_rows, chan % nchan, corr] = True
+
+            # finally actually touch the measurement set
+            if not simulate:
+                politsiyakat.log.info("\tWriting flags to MS")
+                with table(ms, readonly=False, ack=False) as t:
                     t.putcol("FLAG",
                              flag,
                              chunk_i * nrows_to_read,
                              min(t.nrows() - (chunk_i * nrows_to_read),
                                  nrows_to_read))
 
-            # Dump a diagnostic plot of the number of bad phase channels per
-            # baseline
-            uv_dist = uv_dist_per_baseline(no_baselines,
-                                           nant,
-                                           antenna_positions)
-            for c in xrange(ncorr):
-                fig = plt.figure()
-                ranked_uv_dist = np.argsort(uv_dist)
-                plt.plot(uv_dist[ranked_uv_dist],
-                         no_channels_flagged_per_baseline[ranked_uv_dist, c])
-                plt.title(("Flag excessive phase error (corr %d) " % c) + os.path.basename(ms))
-                plt.xlabel("UVdist (m)")
-                plt.ylabel("Number of bad previously unflagged channels")
-                fig.savefig(output_dir + "%s-FLAGGED_PHASE_UVDIST.FIELD_%d.CORR_%d.png" %
-                            (os.path.basename(ms), cal_field, c))
-                plt.close(fig)
+        # Dump a diagnostic plot of the number of bad phase channels per
+        # baseline
+        uv_dist = uv_dist_per_baseline(no_baselines,
+                                       nant,
+                                       antenna_positions)
+        for c in xrange(ncorr):
+            fig = plt.figure()
+            ranked_uv_dist = np.argsort(uv_dist)
+            plt.plot(uv_dist[ranked_uv_dist],
+                     no_channels_flagged_per_baseline[ranked_uv_dist, c])
+            plt.title(("Flag excessive phase error (corr %d) " % c) + os.path.basename(ms))
+            plt.xlabel("UVdist (m)")
+            plt.ylabel("Number of bad previously unflagged channels")
+            fig.savefig(output_dir + "%s-FLAGGED_PHASE_UVDIST.OBSWIDE.CORR_%d.png" %
+                        (os.path.basename(ms),
+                         c))
+            plt.close(fig)
+
+    @classmethod
+    def flag_antennas_with_few_baselines_remaining(cls, **kwargs):
+        """
+            Flags antennae (ANTENNA table flags) that have too few
+            baselines remaining - should be more than the number of antennae.
+        :param kwargs:
+            "msname" : name of measurement set
+            "data_column" : name of data column
+            "field" : field number(s) to inspect, comma-seperated
+            "nrows_chunk" : Number of rows to read per chunk (reduces memory
+                            footprint
+            "simulate" : Only simulate and compute statistics, don't actually
+                         flag anything.
+            "min_bls_per_ant" : Minimum number of baselines per antenna
+                                before flagging antenna out of solvable
+                                antennae list. If not specified defaults to
+                                nant + 1
+        :post-conditions:
+            Measurement set is reflagged to invalidate all baselines affected by
+            severe phase error.
+        """
+        ms_meta = antenna_tasks.check_ms(**kwargs)
+        ms = str(kwargs["msname"])
+
+        try:
+            DATA = str(kwargs["data_column"])
+        except:
+            raise ValueError("flag_excessive_delay_error expects a data column (key 'data_column') as input")
+        try:
+            if not re.match(r"^[0-9]+(?:,[0-9]+)*$", kwargs["field"]):
+                raise ValueError("Expect list of field identifiers")
+            fields = [int(f) for f in kwargs["field"].split(",")]
+        except:
+            raise ValueError("flag_excessive_delay_error expects field(s) (key "
+                             "'field') as input")
+        try:
+            nrows_to_read = int(kwargs["nrows_chunk"])
+        except:
+            raise ValueError("flag_excessive_delay_error expects number of rows to read per chunk "
+                             "(key 'nrows_chunk') as input")
+        try:
+            simulate = bool(kwargs["simulate"])
+            if simulate:
+                politsiyakat.log.warn("Warning: you specified you want to "
+                                      "simulate a flagging run. This means I "
+                                      "will compute statistics for you and "
+                                      "dump some diagnostics but not actually "
+                                      "touch your data.")
+
+        except:
+            raise ValueError("flag_excessive_delay_error expects simulate flag "
+                             "(key 'simulate') as input")
+        try:
+            min_bls_per_ant = int(kwargs["min_bls_per_ant"])
+        except:
+            min_bls_per_ant = ms_meta["nant"] + 1
+            politsiyakat.log.warn("Setting minimum number of baselines to nant"
+                                  " + 1")
+
+        source_names = [ms_meta["ms_field_names"][f] for f in fields]
+        nchan = ms_meta["nchan"]
+        antnames = ms_meta["antenna_names"]
+        nspw = ms_meta["nspw"]
+        map_descriptor_to_spw = ms_meta["map_descriptor_to_spw"]
+        nant = ms_meta["nant"]
+        no_fields = len(fields)
+        no_baselines = ms_meta["no_baselines"]
+        ncorr = ms_meta["ncorr"]
+        nchunk = ms_meta["nchunk"]
+        antenna_positions = ms_meta["antenna_positions"]
+        politsiyakat.log.info("Inspecting the following fields:")
+        for fi, f in enumerate(fields):
+            politsiyakat.log.info("\t(%d): %s" % (f, source_names[fi]))
+        bl_count_per_ant = np.zeros([len(fields),
+                                     nant,
+                                     no_baselines])
+        for chunk_i in xrange(nchunk):
+            politsiyakat.log.info("Processing chunk %d / %d" %
+                                  (chunk_i + 1, nchunk))
+            politsiyakat.log.info("\tReading MS")
+            kwargs["chunk_id"] = chunk_i
+            kwargs["ack"] = False
+            kwargs["read_exclude"] = ["time", "data", "desc", "spw"]
+            maintable_chunk = antenna_tasks.read_ms_maintable_chunk(**kwargs)
+            a1 = maintable_chunk["a1"]
+            a2 = maintable_chunk["a2"]
+            field = maintable_chunk["field"]
+            flag = maintable_chunk["flag"]
+            baseline = maintable_chunk["baseline"]
+
+            for field_i, field_id in enumerate(fields):
+                politsiyakat.log.info("\tProcessing field %s (%d fields "
+                                      "in total)" %
+                                      (source_names[fields.index(field_id)],
+                                       len(fields)))
+
+                rows_with_field = (field == field_id)
+                for ant in xrange(nant):
+                    rows_with_ant_field = \
+                        np.logical_and(rows_with_field,
+                                       np.logical_or(a1 == ant,
+                                                     a2 == ant))
+                    #(nrow, nchan, ncorr)
+                    unflagged_selection = \
+                        np.logical_and(np.logical_not(flag),
+                                       np.tile(rows_with_ant_field,
+                                               (ncorr, nchan, 1)).T)
+                    for row in np.argwhere(np.sum(np.sum(unflagged_selection,
+                                                         axis=1),
+                                                  axis=1) > 0):
+                        bl_count_per_ant[field_i,
+                                         ant,
+                                         baseline[row]] += 1
+        # count unique baselines per antenna
+        # should be more than the minimum per field
+        flag_ant = np.zeros([nant], dtype=np.bool)
+        for field_i, field_id in enumerate(fields):
+            flag_ant = \
+                np.logical_or(flag_ant,
+                              np.sum(bl_count_per_ant[field_i] > 0,
+                                     axis=1) > min_bls_per_ant)
+
+        politsiyakat.log.info("Looking for antennas with fewer than %d "
+                              "unflagged baselines in one or more fields" %
+                              min_bls_per_ant)
+        any_flagged = False
+        for fa in np.argwhere(flag_ant):
+            politsiyakat.log.info("\tAntenna %s was mostly flagged. Will flag "
+                                  "in ANTENNAS table" % antnames[fa])
+            any_flagged = True
+        if not any_flagged:
+            politsiyakat.log.info("\tNo antennae were excessively flagged")
+
+        # finally update the antenna table
+        with table(ms + "::ANTENNA", readonly=False, ack=False) as t:
+            orig_flag_ant = t.getcol("FLAG_ROW")
+            updated_flag_ant = np.logical_or(orig_flag_ant,
+                                             flag_ant)
+            if not simulate:
+                t.putcol("FLAG_ROW", updated_flag_ant)
 
