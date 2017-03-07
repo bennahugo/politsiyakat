@@ -63,6 +63,7 @@ def src_pkg_dirs(pkg_name):
             # Take everything after that ('src...') and
             # append a '/*.*' to it
             pkg_dirs.append(os.path.join(root[l:], d, '*.*'))
+    print pkg_dirs
     return pkg_dirs
 
 def define_scripts():
@@ -85,7 +86,7 @@ setup(name=pkg,
       author='Benjamin Hugo',
       author_email='bhugo@ska.ac.za',
       license='GNU GPL v3',
-      packages=[pkg],
+      packages=[pkg, pkg+"/helpers"],
       install_requires=['numpy', 'matplotlib', 'futures', 'python-casacore'],
       package_data={pkg: src_pkg_dirs(pkg)},
       include_package_data=True,
