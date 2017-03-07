@@ -453,6 +453,7 @@ class antenna_tasks:
                 if field_id not in source_scan_info:
                     source_scan_info[field_id] = {
                         "is_calibrator": (field_id in cal_fields),
+                        "scan_list": [],
                     }
                 source_rows = np.argwhere(field == field_id)
                 source_scans = np.unique(scan[source_rows])
@@ -476,14 +477,12 @@ class antenna_tasks:
                             "num_unflagged_vis" : np.zeros([no_baselines,
                                                             nchan * nspw,
                                                             ncorr]),
-                            "total_num_vis" : np.zeros([no_baselines,
-                                                        nchan * nspw,
-                                                        ncorr]),
                             "num_phase_error" : np.zeros([no_baselines,
                                                           nchan * nspw,
                                                           ncorr]),
                             "num_chunks" : 1,
                         }
+                        source_scan_info[field_id]["scan_list"].append(s)
                         politsiyakat.log.info("\t\t\tChunk contains start of a new"
                                               " scan %d, duration %ds" %
                                               (s, scan_end - scan_start))
@@ -498,13 +497,12 @@ class antenna_tasks:
                                               (s,
                                                source_scan_info[field_id][s]["scan_end"]
                                                - source_scan_info[field_id][s]["scan_start"]))
-
+                    notflag = np.logical_not(flag)
                     for spw_i in xrange(nspw):
                         futures_list = []
                         data_in_scan_spw = \
-                            np.tile(np.logical_and(scan == s,
-                                                   spw == spw_i),
-                                    (ncorr, nchan, 1)).T
+                            np.logical_and(scan == s,
+                                           spw == spw_i)
 
                         for bi in xrange(no_baselines):
                             def compute_bl_stats(bi,
@@ -515,26 +513,22 @@ class antenna_tasks:
                                                  nchan,
                                                  is_cal_field):
                                 # (nrows, nchan, ncorr)
-                                data_in_bi_scan_spw = \
+                                data_in_bi_scan_spw = np.argwhere(
                                     np.logical_and(
                                         data_in_scan_spw,
-                                        np.tile(baseline == bi,
-                                                (ncorr,
-                                                 nchan,
-                                                 1)).T)
-                                unflag_data = \
-                                    np.logical_and(np.logical_not(flag),
-                                                   data_in_bi_scan_spw)
+                                        baseline == bi))
 
                                 # Now select all unflagged data of this
                                 # baseline, within this field and spw
-                                amp_selection = np.abs(data) * unflag_data
+                                selection_data = data[data_in_bi_scan_spw]
+                                selection_nf = notflag[data_in_bi_scan_spw]
+                                selection_flagged = selection_data * \
+                                    selection_nf
+                                amp_selection = np.abs(selection_flagged)
 
                                 # (chan, corr) for each baseline of a field
-                                count_unflagged = np.sum(
-                                    unflag_data, axis=0)
-                                count_total = np.sum(
-                                    data_in_bi_scan_spw, axis=0)
+                                count_unflagged = np.sum(selection_nf,
+                                                         axis=0)
 
                                 # compute mean of this chunk of
                                 # field data for this baseline
@@ -546,33 +540,34 @@ class antenna_tasks:
                                 # if the scan is that of a calibrator
                                 # clip the phase if it is out of range
                                 if is_cal_field:
+                                    selection_f = flag[data_in_bi_scan_spw]
+                                    count_flagged = np.sum(selection_f,
+                                                           axis=0)
                                     phase_selection = \
-                                        np.angle(data) * unflag_data
-                                    L = np.logical_and(
-                                        data_in_bi_scan_spw,
+                                        np.angle(selection_flagged)
+                                    flag[data_in_bi_scan_spw] = np.logical_or(
+                                        flag[data_in_bi_scan_spw],
                                         np.logical_or(
                                             phase_selection <
                                                 low_valid_phase,
                                             phase_selection >
                                                 high_valid_phase))
-                                    pf = np.logical_or(flag,
-                                                       L)
-                                    count_pf = \
-                                        np.count_nonzero(L, axis=0)
+                                    pf = flag.view()
+                                    count_pf = np.sum(flag[data_in_bi_scan_spw],
+                                                      axis=0) - count_flagged
                                 else:
                                     pf = flag.view()
                                     count_pf = np.zeros([nchan, ncorr])
 
-                                return (count_unflagged,
-                                        count_total,
-                                        sum_unflagged,
+                                return (count_unflagged.reshape([nchan, ncorr]),
+                                        sum_unflagged.reshape([nchan, ncorr]),
                                         pf,
-                                        count_pf)
+                                        count_pf.reshape([nchan, ncorr]))
 
                             futures_list.append(
                                 executor.submit(compute_bl_stats,
                                                 bi,
-                                                flag.view(),
+                                                flag.copy(),
                                                 data.view(),
                                                 data_in_scan_spw.view(),
                                                 ncorr,
@@ -581,7 +576,6 @@ class antenna_tasks:
 
                         for bi in xrange(no_baselines):
                             bl_unflagged_vis_count,\
-                            bl_total_vis_count,\
                             bl_sum_unflagged,\
                             pf,\
                             bl_count_pf = futures_list[bi].result()
@@ -594,16 +588,12 @@ class antenna_tasks:
                                  [bi,
                                   (spw_i*nchan):((spw_i+1)*nchan),
                                   :] += bl_unflagged_vis_count
-                            source_scan_info[field_id][s]["total_num_vis"]\
-                                 [bi,
-                                  (spw_i*nchan):((spw_i+1)*nchan),
-                                  :] += bl_total_vis_count
                             source_scan_info[field_id][s]["num_phase_error"]\
                                  [bi,
                                   (spw_i*nchan):((spw_i+1)*nchan),
                                   :] += bl_count_pf
                             if not simulate:
-                                flag = pf
+                                flag = np.logical_or(pf, flag) #reduce
 
             # Write flags of the calibrators back to the ms
             if not simulate:
@@ -627,8 +617,7 @@ class antenna_tasks:
                                               nchan * nspw,
                                               ncorr])
         for field_id in cal_fields:
-            scan_list = [k for k in source_scan_info[field_id]
-                         if isinstance(k, int)]
+            scan_list = source_scan_info[field_id]["scan_list"]
             for s in scan_list:
                 histogram_phase_off += \
                     source_scan_info[field_id][s]["num_phase_error"]
@@ -667,8 +656,7 @@ class antenna_tasks:
             politsiyakat.log.info("Doing interscan comparisons for field "
                                   "%s (total %d fields)" %
                                   (source_names[field_i], no_fields))
-            scan_list = [k for k in source_scan_info[field_id]
-                         if isinstance(k, int)]
+            scan_list = source_scan_info[field_id]["scan_list"]
 
             # Compute mean power per baseline channel per scan
             # then compute the median of these scan baseline channel
@@ -720,7 +708,7 @@ class antenna_tasks:
 
             # (nchan, ncorr), median per baseline channel
             median_chan_power = np.median(median_scan_power,
-                                        axis=0)
+                                          axis=0)
 
             # the per baseline comparison between scans are safe to use
             # for both calibrator and target fields
@@ -900,8 +888,7 @@ class antenna_tasks:
                 # calibrators during power calculations, all that remains 
                 # is to apply scan-based amplitude flags per baseline, 
                 # channel and correlation
-                scan_list = [k for k in source_scan_info[field_id]
-                             if isinstance(k, int)]
+                scan_list = source_scan_info[field_id]["scan_list"]
                 for s in scan_list:
                     flagged_baselines = np.argwhere(np.logical_or(
                         source_scan_info[field_id][s]["hot_bl_scan"] > 0,
@@ -939,7 +926,7 @@ class antenna_tasks:
             plt.title(("Flag excessive phase error (corr %d) " % c) + os.path.basename(ms))
             plt.xlabel("UVdist (m)")
             plt.ylabel("Number of bad previously unflagged channels")
-            fig.savefig(output_dir + "%s-FLAGGED_PHASE_UVDIST.OBSWIDE.CORR_%d.png" %
+            fig.savefig(output_dir + "/%s-FLAGGED_PHASE_UVDIST.OBSWIDE.CORR_%d.png" %
                         (os.path.basename(ms),
                          c))
 
@@ -955,7 +942,7 @@ class antenna_tasks:
             plt.title(("Flag excessive amplitude error (corr %d) " % c) + os.path.basename(ms))
             plt.xlabel("UVdist (m)")
             plt.ylabel("Number of bad previously unflagged channels")
-            fig.savefig(output_dir + "%s-FLAGGED_AMP_UVDIST.OBSWIDE.CORR_%d.png" %
+            fig.savefig(output_dir + "/%s-FLAGGED_AMP_UVDIST.OBSWIDE.CORR_%d.png" %
                         (os.path.basename(ms),
                          c))
             plt.close(fig)
@@ -985,7 +972,7 @@ class antenna_tasks:
                 plt.xlabel("UVdist (m)")
                 plt.ylabel("Number of bad previously unflagged channels")
                 plt.legend()
-                fig.savefig(output_dir + "%s-FLAGGED_AMP_UVDIST.CALFIELD_%s.CORR_%d.png" %
+                fig.savefig(output_dir + "/%s-FLAGGED_AMP_UVDIST.CALFIELD_%s.CORR_%d.png" %
                             (os.path.basename(ms),
                              field_id,
                              c))
@@ -993,8 +980,7 @@ class antenna_tasks:
             total_phase_clip = np.zeros([no_baselines,
                                          nchan,
                                          ncorr])
-            scan_list = [k for k in source_scan_info[field_id]
-                         if isinstance(k, int)]
+            scan_list = source_scan_info[field_id]["scan_list"]
             for s in scan_list:
                 # (nbl, nchan, ncorr)
                 total_phase_clip += source_scan_info[field_id][s]["num_phase_error"]
@@ -1010,7 +996,7 @@ class antenna_tasks:
                           " %s) " % (c, source_names[field_i])) + os.path.basename(ms))
                 plt.xlabel("UVdist (m)")
                 plt.ylabel("Number of bad previously unflagged channels")
-                fig.savefig(output_dir + "%s-FLAGGED_PHASE_UVDIST.CALFIELD_%s.CORR_%d.png" %
+                fig.savefig(output_dir + "/%s-FLAGGED_PHASE_UVDIST.CALFIELD_%s.CORR_%d.png" %
                             (os.path.basename(ms),
                              field_id,
                              c))
@@ -1019,8 +1005,7 @@ class antenna_tasks:
         # Dump diagnostic plots of the amplitude clips done per scan
         # (intra-baseline basis)
         for field_i, field_id in enumerate(fields):
-            scan_list = [k for k in source_scan_info[field_id]
-                         if isinstance(k, int)]
+            scan_list = source_scan_info[field_id]["scan_list"]
             for c in xrange(ncorr):
                 fig = plt.figure()
                 cmcool = plt.get_cmap("cool")
@@ -1049,7 +1034,7 @@ class antenna_tasks:
                 plt.xlabel("Time")
                 plt.ylabel("Number of bad previously unflagged channels")
                 fig.savefig(output_dir +
-                            "%s-FLAGGED_AMP_SCAN.FIELD_%s.CORR_%d.png" %
+                            "/%s-FLAGGED_AMP_SCAN.FIELD_%s.CORR_%d.png" %
                             (os.path.basename(ms),
                              field_id,
                              c))
@@ -1304,7 +1289,7 @@ class antenna_tasks:
             plt.title(("Flag excessive phase error (corr %d) " % c) + os.path.basename(ms))
             plt.xlabel("UVdist (m)")
             plt.ylabel("Number of bad previously unflagged channels")
-            fig.savefig(output_dir + "%s-FLAGGED_PHASE_UVDIST.OBSWIDE.CORR_%d.png" %
+            fig.savefig(output_dir + "/%s-FLAGGED_PHASE_UVDIST.OBSWIDE.CORR_%d.png" %
                         (os.path.basename(ms),
                          c))
             plt.close(fig)
