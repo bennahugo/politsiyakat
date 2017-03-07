@@ -47,10 +47,6 @@ def get_version():
 
     return version_git
 
-def readme():
-    with open(os.path.join(build_root, 'README.md')) as f:
-        return f.read()
-
 def requirements():
     with open(os.path.join(build_root, 'requirements.txt')) as f:
         return [pname.strip() for pname in f.readlines()]
@@ -80,7 +76,6 @@ def define_scripts():
 setup(name=pkg,
       version=get_version(),
       description='Tool to flag baselines with amplitude and phase problems',
-      long_description=readme(),
       url='https://github.com/bennahugo/politsiyakat',
       download_url='https://github.com/bennahugo/politsiyakat/archive/0.2alpha.tar.gz',
       classifiers=[
@@ -95,7 +90,7 @@ setup(name=pkg,
       author_email='bhugo@ska.ac.za',
       license='GNU GPL v3',
       packages=[pkg],
-      install_requires=requirements(),
+      install_requires='',
       package_data={pkg: src_pkg_dirs(pkg)},
       include_package_data=True,
       zip_safe=False,
