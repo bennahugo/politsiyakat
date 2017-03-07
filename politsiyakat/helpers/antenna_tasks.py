@@ -1026,7 +1026,8 @@ class antenna_tasks:
                                     c=np.repeat(uv_dist[bl], no_baselines),
                                     vmin=np.min(uv_dist),
                                     vmax=np.max(uv_dist),
-                                    cmap=cmcool)
+                                    cmap=cmcool,
+                                    s=0.1)
                 plt.colorbar()
                 plt.title(("Flagged amp time fluctuations (col:uvdist, "
                            "corr %d, field %s) " % (c, source_names[field_i])) +
