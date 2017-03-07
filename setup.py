@@ -47,10 +47,6 @@ def get_version():
 
     return version_git
 
-def requirements():
-    with open(os.path.join(build_root, 'requirements.txt')) as f:
-        return [pname.strip() for pname in f.readlines()]
-
 def src_pkg_dirs(pkg_name):
     mbdir = os.path.join(build_root, pkg_name)
     # Ignore
@@ -90,7 +86,7 @@ setup(name=pkg,
       author_email='bhugo@ska.ac.za',
       license='GNU GPL v3',
       packages=[pkg],
-      install_requires='',
+      install_requires=['numpy', 'matplotlib', 'futures', 'python-casacore'],
       package_data={pkg: src_pkg_dirs(pkg)},
       include_package_data=True,
       zip_safe=False,
