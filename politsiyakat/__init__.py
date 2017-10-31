@@ -24,10 +24,11 @@ os.environ['MPLBACKEND'] = "Agg"
 import argparse
 import logging
 import sys
-from helpers.antenna_tasks import antenna_tasks
+from politsiyakat.modules.antenna_tasks import antenna_tasks
 import json
 from version import __version__
 import politsiyakat
+from politsiyakat.processing.async_pool import async_pool
 
 # Where is the module installed?
 __install_path = os.path.split(os.path.abspath(politsiyakat.__file__))[0]
@@ -44,6 +45,11 @@ def create_logger():
 
 log = create_logger()
 
+def create_ppool():
+    """ Creates process pool """
+    return async_pool(2, 4)
+
+pool = create_ppool()
 
 def main(argv = None):
     """ Driver: all tasks invoked from here """
@@ -107,5 +113,7 @@ def main(argv = None):
         log.info("\t%s:%s" % (key, val))
 
     run_func(**args.kwargs)
+    log.info("Waiting for remaining jobs to finish...")
+    pool.shutdown()
     log.info("PolitsiyaKAT terminated successfully")
     return 0

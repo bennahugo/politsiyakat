@@ -17,263 +17,31 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from pyrap.tables import table
+
 import os
 import numpy as np
 import politsiyakat
 import re
 from matplotlib import pyplot as plt
+import scipy.interpolate as interp
 import matplotlib as mpl
 import matplotlib.cm as cm
-from concurrent.futures.thread import ThreadPoolExecutor
-import multiprocessing
-
-def baseline_index(a1, a2, no_antennae):
-    """
-     Computes unique index of a baseline given antenna 1 and antenna 2
-     (zero indexed) as input. The arrays may or may not contain
-     auto-correlations.
-
-     There is a quadratic series expression relating a1 and a2
-     to a unique baseline index(can be found by the double difference
-     method)
-
-     Let slow_varying_index be S = min(a1, a2). The goal is to find
-     the number of fast varying terms. As the slow
-     varying terms increase these get fewer and fewer, because
-     we only consider unique baselines and not the conjugate
-     baselines)
-     B = (-S ^ 2 + 2 * S *  # Ant + S) / 2 + diff between the
-     slowest and fastest varying antenna
-
-    :param a1: array of ANTENNA_1 ids
-    :param a2: array of ANTENNA_2 ids
-    :param no_antennae: number of antennae in the array
-    :return: array of baseline ids
-    """
-    if a1.shape != a2.shape:
-        raise ValueError("a1 and a2 must have the same shape!")
-
-    slow_index = np.min(np.array([a1, a2]), axis=0)
-
-    return (slow_index * (-slow_index + (2 * no_antennae + 1))) // 2 + \
-        np.abs(a1 - a2)
-
-def uv_dist_per_baseline(no_baselines, nant, antenna_positions):
-    """
-    Given antenna positions in an earth centric earth fixed frame
-    compute the unscaled uv distance per baseline
-    :param no_baselines: Number of baselines
-    :param nant: Number of antennae
-    :param antenna_positions: array of [X,Y,Z] ITRS antenna positions
-                              as found in a MS ANTENNA table
-    return array of uv distances per unique baseline index
-    """
-    # Antenna positions should be in some earth centric earth fixed frame
-    # which can be rotated to celestial horizon and then to uvw coordinates
-    # so I'm assuming this will be an okay estimate for uv dist (with no
-    # scaling by wavelength)
-    uv_dist_sq = np.zeros([no_baselines])
-    relative_position_a0 = antenna_positions - antenna_positions[0]
-    lbound = 0
-    bi = 0
-    for a0 in xrange(lbound, nant):
-        for a1 in xrange(a0, nant):
-            uv_dist_sq[bi] = np.sum((relative_position_a0[a0] -
-                                     relative_position_a0[a1]) ** 2)
-            bi += 1
-        lbound += 1
-    return np.sqrt(uv_dist_sq)
-
+from politsiyakat.data.misc import *
+from politsiyakat.data.data_provider import data_provider
+from shared_ndarray import SharedNDArray as sha
+import concurrent
+import time
 
 class antenna_tasks:
     """
        Tasks Helper class
 
        Contains a number of tasks to detect and
-       remove / fix cases where antennas have gone bad.
+       remove / fix cases where antennas have gone rogue.
     """
 
     def __init__(self):
         pass
-
-    @classmethod
-    def check_ms(cls, **kwargs):
-        """
-            Basic ms validity check and meta data extraction
-        :param_kwargs:
-            "msname" : name of measurement set
-            "nrows_chunk" : number of rows per chunk
-        """
-        try:
-            ms = str(kwargs["msname"])
-        except:
-            raise ValueError("check_ms (or any task that calls it) expects a "
-                             "measurement set (key 'msname') as input")
-
-        try:
-            nrows_to_read = int(kwargs["nrows_chunk"])
-        except:
-            raise ValueError("Task check_ms expects num "
-                             "rows per chunk (key 'nrows_chunk')")
-        try:
-            ack = kwargs["ack"]
-        except:
-            ack = True
-
-        if not os.path.isdir(ms):
-            raise RuntimeError("Measurement set %s does not exist. Check input" % ms)
-
-        ms_meta = {}
-
-        with table(ms, readonly=True, ack=False) as t:
-            ms_meta["nchunk"] = int(np.ceil(t.nrows() /
-                                            float(nrows_to_read)))
-            flag_shape = t.getcell("FLAG", 0).shape
-            ms_meta["nrows"] = t.nrows()
-
-        if len(flag_shape) != 2:  # spectral flags are optional in CASA memo 229
-            raise RuntimeError("%s does not support storing spectral flags. "
-                               "Maybe run pyxis ms.prep?" % ms)
-
-        with table(ms + "::FIELD", readonly=True, ack=False) as t:
-            ms_meta["ms_field_names"] = t.getcol("NAME")
-
-        with table(ms + "::SPECTRAL_WINDOW", readonly=True, ack=False) as t:
-            ms_meta["nspw"] = t.nrows()
-            ms_meta["spw_name"] = t.getcol("NAME")
-            spw_nchans = t.getcol("NUM_CHAN")
-
-        assert np.alltrue([spw_nchans[0] == spw_nchans[c]
-                           for c in xrange(ms_meta["nspw"])]), \
-            "for now we can only handle equi-channel spw"
-        ms_meta["nchan"] = spw_nchans[0]
-
-        with table(ms + "::DATA_DESCRIPTION", readonly=True, ack=False) as t:
-            ms_meta["map_descriptor_to_spw"] = t.getcol("SPECTRAL_WINDOW_ID")
-
-        with table(ms + "::ANTENNA", readonly=True, ack=False) as t:
-            ms_meta["antenna_names"] = t.getcol("NAME")
-            ms_meta["antenna_positions"] = t.getcol("POSITION")
-            ms_meta["nant"] = t.nrows()
-
-        # be conservative autocorrelations is probably still in the mix
-        # since they can be quite critical in calibration
-        ms_meta["no_baselines"] = \
-            (ms_meta["nant"] * (ms_meta["nant"] - 1)) // 2 + ms_meta["nant"]
-
-        with table(ms + "::POLARIZATION", readonly=True, ack=False) as t:
-            ncorr = t.getcol("NUM_CORR")
-        assert np.alltrue([ncorr[0] == ncorr[c] for c in xrange(len(ncorr))]), \
-            "for now we can only handle rows that all have the same number correlations"
-        ms_meta["ncorr"] = ncorr[0]
-        if ack:
-            politsiyakat.log.info("%s appears to be a valid measurement set with %d rows" % 
-                                  (ms, ms_meta["nrows"]))
-        return ms_meta
-
-    @classmethod
-    def read_ms_maintable_chunk(cls, **kwargs):
-        """
-            Reads and returns a given chunk of data
-        :param kwargs:
-            "msname" : name of measurement set
-            "data_column" : data column to use for amplitude flagging
-            "chunk_id" : id of chunk to read
-            "nrows_chunk" : size of chunk in rows to read
-        """
-        ms_meta = antenna_tasks.check_ms(**kwargs)
-        ms = str(kwargs["msname"])
-        try:
-            msname = str(kwargs["msname"])
-        except:
-            raise ValueError("Task read_ms_maintable_chunk expects ms name "
-                             "(key 'msname')")
-        try:
-            chunk_i = int(kwargs["chunk_id"])
-        except:
-            raise ValueError("Task read_ms_maintable_chunk expects chunk id "
-                             "(key 'chunk_id')")
-        try:
-            nrows_to_read = int(kwargs["nrows_chunk"])
-        except:
-            raise ValueError("Task read_ms_maintable_chunk expects num "
-                             "rows per chunk (key 'nrows_chunk')")
-        try:
-            DATA = str(kwargs["data_column"])
-        except:
-            raise ValueError("flag_amplitude_drifts expects a data column (key 'data_column') as input")
-        try:
-            if not isinstance(kwargs["read_exclude"], list):
-                raise ValueError("readexclude list not list")
-            read_exclude = kwargs["read_exclude"]
-        except:
-            read_exclude = []
-
-        maintable_chunk = {}
-        map_descriptor_to_spw = ms_meta["map_descriptor_to_spw"]
-
-        with table(ms, readonly=True, ack=False) as t:
-            if not "a1" in read_exclude:
-                maintable_chunk["a1"] = t.getcol(
-                    "ANTENNA1",
-                    chunk_i * nrows_to_read,
-                    min(t.nrows() - (chunk_i * nrows_to_read),
-                        nrows_to_read))
-            if not "a2" in read_exclude:
-                maintable_chunk["a2"] = t.getcol(
-                    "ANTENNA2",
-                    chunk_i * nrows_to_read,
-                    min(t.nrows() - (chunk_i * nrows_to_read),
-                        nrows_to_read))
-            if not "a1" in read_exclude \
-               and not "a2" in read_exclude:
-                maintable_chunk["baseline"] = \
-                    baseline_index(maintable_chunk["a1"],
-                                   maintable_chunk["a2"],
-                                   ms_meta["nant"])
-            if not "field" in read_exclude:
-                maintable_chunk["field"] = t.getcol(
-                    "FIELD_ID",
-                    chunk_i * nrows_to_read,
-                    min(t.nrows() - (chunk_i * nrows_to_read),
-                        nrows_to_read))
-            if not "data" in read_exclude:
-                maintable_chunk["data"] = t.getcol(
-                    DATA,
-                    chunk_i * nrows_to_read,
-                    min(t.nrows() - (chunk_i * nrows_to_read),
-                        nrows_to_read))
-            if not "flag" in read_exclude:
-                maintable_chunk["flag"] = t.getcol(
-                    "FLAG",
-                    chunk_i * nrows_to_read,
-                    min(t.nrows() - (chunk_i * nrows_to_read),
-                        nrows_to_read))
-            if not "desc" in read_exclude:
-                maintable_chunk["desc"] = t.getcol(
-                    "DATA_DESC_ID",
-                    chunk_i * nrows_to_read,
-                    min(t.nrows() - (chunk_i * nrows_to_read),
-                        nrows_to_read))
-            if not "spw" in read_exclude\
-               and not "desc" in read_exclude:
-                maintable_chunk["spw"] = \
-                    map_descriptor_to_spw[maintable_chunk["desc"]]
-            if not "scan" in read_exclude:
-                maintable_chunk["scan"] = t.getcol(
-                    "SCAN_NUMBER",
-                    chunk_i * nrows_to_read,
-                    min(t.nrows() - (chunk_i * nrows_to_read),
-                        nrows_to_read))
-            if not "time" in read_exclude:
-                maintable_chunk["time"] = t.getcol(
-                    "TIME",
-                    chunk_i * nrows_to_read,
-                    min(t.nrows() - (chunk_i * nrows_to_read),
-                        nrows_to_read))
-
-        return maintable_chunk
 
     @classmethod
     def flag_excessive_amp_phase_error(cls, **kwargs):
@@ -319,7 +87,7 @@ class antenna_tasks:
         :post conditions:
             if simulate is false the measurement flags will be modified
         """
-        ms_meta = antenna_tasks.check_ms(**kwargs)
+        ms_meta = dp.check_ms(**kwargs)
         ms = str(kwargs["msname"])
 
         try:
@@ -433,7 +201,7 @@ class antenna_tasks:
             politsiyakat.log.info("\tReading MS")
             kwargs["chunk_id"] = chunk_i
             kwargs["ack"] = False
-            maintable_chunk = antenna_tasks.read_ms_maintable_chunk(**kwargs)
+            maintable_chunk = dp.read_ms_maintable_chunk(**kwargs)
             a1 = maintable_chunk["a1"]
             a2 = maintable_chunk["a2"]
             baseline = maintable_chunk["baseline"]
@@ -624,7 +392,7 @@ class antenna_tasks:
                 histogram_total_unflagged += \
                     source_scan_info[field_id][s]["num_unflagged_vis"]
 
-        # Clip baselines (per channel and correlation) that were 
+        # Clip baselines (per channel and correlation) that were
         # dominated by phase error during the calibrator scans
         blnz = (histogram_total_unflagged != 0)
         histogram_percentage_phase_off = \
@@ -757,7 +525,7 @@ class antenna_tasks:
             source_scan_info[field_id]["median_scan_power"] = \
                 median_scan_power
 
-            # when looking at corrected calibrator fields then we 
+            # when looking at corrected calibrator fields then we
             # can compare amplitudes between baselines and flag
             # out overall hot and cold baselines.
             hot_bl = np.zeros([no_baselines,
@@ -870,7 +638,7 @@ class antenna_tasks:
                         flag[apply_rows, ch_i % nchan, corr_i] = True
 
                 # if the source is a calibrator we can also flag out
-                # times where individual baseline channels drifted 
+                # times where individual baseline channels drifted
                 # from the median power for that channel accross
                 # all scans
                 if source_scan_info[field_id]["is_calibrator"]:
@@ -885,8 +653,8 @@ class antenna_tasks:
                             flag[apply_rows, ch_i % nchan, corr_i] = True
 
                 # The scan-based phase clips were already applied to the
-                # calibrators during power calculations, all that remains 
-                # is to apply scan-based amplitude flags per baseline, 
+                # calibrators during power calculations, all that remains
+                # is to apply scan-based amplitude flags per baseline,
                 # channel and correlation
                 scan_list = source_scan_info[field_id]["scan_list"]
                 for s in scan_list:
@@ -1073,7 +841,7 @@ class antenna_tasks:
             Measurement set is reflagged to invalidate all baselines affected by
             severe phase error.
         """
-        ms_meta = antenna_tasks.check_ms(**kwargs)
+        ms_meta = dp.check_ms(**kwargs)
         ms = str(kwargs["msname"])
 
         try:
@@ -1173,7 +941,7 @@ class antenna_tasks:
             kwargs["chunk_id"] = chunk_i
             kwargs["ack"] = False
             kwargs["read_exclude"] = ["scan", "time"]
-            maintable_chunk = antenna_tasks.read_ms_maintable_chunk(**kwargs)
+            maintable_chunk = dp.read_ms_maintable_chunk(**kwargs)
             a1 = maintable_chunk["a1"]
             a2 = maintable_chunk["a2"]
             baseline = maintable_chunk["baseline"]
@@ -1437,3 +1205,391 @@ class antenna_tasks:
             if not simulate:
                 t.putcol("FLAG_ROW", updated_flag_ant)
 
+    @classmethod
+    def test_data_ld(cls, **kwargs):
+        """
+            Flags antennae (ANTENNA table flags) that have too few
+            baselines remaining - should be more than the number of antennae.
+        :param kwargs:
+            "msname" : name of measurement set
+            "data_column" : name of data column
+            "field" : field number(s) to inspect, comma-seperated
+            "nrows_chunk" : Number of rows to read per chunk (reduces memory
+                            footprint
+            "simulate" : Only simulate and compute statistics, don't actually
+                         flag anything.
+            "min_bls_per_ant" : Minimum number of baselines per antenna
+                                before flagging antenna out of solvable
+                                antennae list. If not specified defaults to
+                                nant + 1
+            "output_dir"  : Name of output dir where to dump diagnostic plots
+        :post-conditions:
+            Measurement set is reflagged to invalidate all baselines affected by
+            severe phase error.
+        """
+        ms_meta = data_provider.check_ms(**kwargs)
+        ms = str(kwargs["msname"])
+
+        try:
+            DATA = str(kwargs["data_column"])
+        except:
+            raise ValueError("flag_excessive_delay_error expects a data column (key 'data_column') as input")
+        try:
+            if not re.match(r"^[0-9]+(?:,[0-9]+)*$", kwargs["field"]):
+                raise ValueError("Expect list of field identifiers")
+            fields = [int(f) for f in kwargs["field"].split(",")]
+        except:
+            raise ValueError("flag_excessive_delay_error expects field(s) (key "
+                             "'field') as input")
+
+        try:
+            if not re.match(r"^[0-9]+(?:,[0-9]+)*$", kwargs["field"]):
+                raise ValueError("Expect list of field identifiers")
+            cal_fields = [int(f) for f in kwargs["cal_field"].split(",")]
+        except:
+            raise ValueError("flag_excessive_delay_error expects calibrator field(s) (key "
+                             "'cal_field') as input")
+        try:
+            nrows_to_read = int(kwargs["nrows_chunk"])
+        except:
+            raise ValueError("flag_excessive_delay_error expects number of rows to read per chunk "
+                             "(key 'nrows_chunk') as input")
+        try:
+            simulate = bool(kwargs["simulate"])
+            if simulate:
+                politsiyakat.log.warn("Warning: you specified you want to "
+                                      "simulate a flagging run. This means I "
+                                      "will compute statistics for you and "
+                                      "dump some diagnostics but not actually "
+                                      "touch your data.")
+
+        except:
+            raise ValueError("flag_excessive_delay_error expects simulate flag "
+                             "(key 'simulate') as input")
+
+        try:
+            output_dir = str(kwargs["output_dir"])
+        except:
+            raise ValueError("flag_excessive_delay_error expects an output_directory "
+                             "(key 'output_dir') as input")
+
+        source_names = [ms_meta["ms_field_names"][f] for f in fields]
+        nchan = ms_meta["nchan"]
+        antnames = ms_meta["antenna_names"]
+        nspw = ms_meta["nspw"]
+        map_descriptor_to_spw = ms_meta["map_descriptor_to_spw"]
+        nant = ms_meta["nant"]
+        no_fields = len(fields)
+        no_baselines = ms_meta["no_baselines"]
+        ncorr = ms_meta["ncorr"]
+        nchunk = ms_meta["nchunk"]
+        antenna_positions = ms_meta["antenna_positions"]
+
+        politsiyakat.log.info("Will process the following fields:")
+        for fi, f in enumerate(fields):
+            politsiyakat.log.info("\t(%d): %s" % (f, source_names[fi]) + (
+                " (calibrator)" if f in cal_fields else ""))
+
+        source_scan_info = {}
+        obs_start = None
+        with data_provider(msname=ms,
+                           data_column=DATA,
+                           nrows_chunk=nrows_to_read) as dp:
+            for chunk_i, data in enumerate(iter(dp)):
+                if chunk_i > 3:
+                    break
+                politsiyakat.log.info("Processing chunk %d of %d..." %
+                                      (chunk_i + 1, nchunk))
+                politsiyakat.log.info("\tReading MS")
+                obs_start = min(obs_start, np.min(data["time"])) \
+                    if obs_start is not None else np.min(data["time"])
+                politsiyakat.log.info("\tProcessing field:")
+                for field_i, field_id in enumerate(fields):
+                    if field_id not in source_scan_info:
+                        source_scan_info[field_id] = {
+                            "is_calibrator": (field_id in cal_fields),
+                            "scan_list": [],
+                        }
+                    source_rows = np.argwhere(data["field"] == field_id)
+                    source_scans = np.unique(data["scan"][source_rows])
+                    if source_scans.size == 0:
+                        politsiyakat.log.info("\t\t\tField %s is not present in this chunk" % source_names[field_id])
+                        continue
+
+                    for s in source_scans:
+                        scan_rows = np.argwhere(data["scan"] == s)
+                        scan_start = np.min(data["time"][scan_rows])
+                        scan_end = np.max(data["time"][scan_rows])
+                        if s not in source_scan_info[field_id]:
+                            source_scan_info[field_id][s] = {
+                                "scan_start": scan_start,
+                                "scan_end": scan_end,
+                                "tot_autopower": np.zeros([nant,
+                                                           nchan * nspw,
+                                                           ncorr]),
+                                "tot_autocount": np.zeros([nant,
+                                                          nchan * nspw,
+                                                          ncorr]),
+                                "tot_flagged": np.zeros([nant,
+                                                        nchan * nspw,
+                                                        ncorr]),
+                                "tot_rowcount": np.zeros([nant,
+                                                         nchan * nspw,
+                                                         ncorr]),
+                                # "avg_bl_phase": sha([no_baselines,
+                                #                      nchan * nspw,
+                                #                      ncorr]),
+                                # "std_bl_phase": sha([no_baselines,
+                                #                      nchan * nspw,
+                                #                      ncorr]),
+                                "num_chunks": 1,
+                            }
+                            source_scan_info[field_id]["scan_list"].append(s)
+                        else:
+                            source_scan_info[field_id][s]["num_chunks"] += 1
+                            source_scan_info[field_id][s]["scan_start"] = \
+                                min(source_scan_info[field_id][s]["scan_start"], scan_start)
+                            source_scan_info[field_id][s]["scan_end"] = \
+                                max(source_scan_info[field_id][s]["scan_end"], scan_end)
+
+                        for spw in xrange(nspw):
+                            epic_name = 'antenna stats for %s' % source_names[field_id]
+                            for a in xrange(nant):
+                                politsiyakat.pool.submit_to_epic(epic_name,
+                                                                 _wk_per_ant_stats,
+                                                                 a,
+                                                                 ncorr,
+                                                                 nchan,
+                                                                 spw,
+                                                                 field_id,
+                                                                 s,
+                                                                 data,
+                                                                 source_scan_info)
+                            # for bl in xrange(no_baselines):
+                            #     politsiyakat.pool.submit_to_epic(epic_name,
+                            #                                      _wk_per_bl_stats,
+                            #                                      bl,
+                            #                                      nant,
+                            #                                      ncorr,
+                            #                                      nchan,
+                            #                                      spw,
+                            #                                      field_id,
+                            #                                      s,
+                            #                                      data,
+                            #                                      accum_sel,
+                            #                                      accum_sel_tiled,
+                            #                                      source_scan_info
+                            #                                      )
+                            res = politsiyakat.pool.collect_epic(epic_name)
+                            for r in res:
+                                if r[0] == "antstat":
+                                    task, ant, \
+                                    spw, autopow, \
+                                    autocount, totflagged, \
+                                    totrowcount = r
+                                    source_scan_info[field_id][s]["tot_autopower"][ant, spw * nchan:(spw + 1) * nchan, :] += \
+                                        autopow
+                                    source_scan_info[field_id][s]["tot_autocount"][ant, spw * nchan:(spw + 1) * nchan, :] += \
+                                        autocount
+                                    source_scan_info[field_id][s]["tot_flagged"][ant, spw * nchan:(spw + 1) * nchan, :] += \
+                                        totflagged
+                                    source_scan_info[field_id][s]["tot_rowcount"][ant, spw * nchan:(spw + 1) * nchan, :] += \
+                                        totrowcount
+                    tot_flagged = 0
+                    tot_sel = 0
+                    for s in source_scans:
+                        tot_flagged += np.sum(source_scan_info[field_id][s]["tot_flagged"])
+                        tot_sel += np.sum(source_scan_info[field_id][s]["tot_rowcount"])
+                    if tot_sel != 0:
+                        politsiyakat.log.info("\t\t\tField %s is %.2f %% flagged in this chunk" %
+                                              (source_names[field_id],
+                                               tot_flagged / tot_sel * 100.0))
+
+            # Print some stats per field
+            for field_i, field_id in enumerate(fields):
+                politsiyakat.log.info("Field %s has the following scans:" % source_names[field_id])
+                for s in source_scan_info[field_id]["scan_list"]:
+                    flagged = np.sum(source_scan_info[field_id][s]["tot_flagged"])
+                    count = np.sum(source_scan_info[field_id][s]["tot_rowcount"])
+                    politsiyakat.log.info("\tScan %d (duration: %0.2f seconds) is %.2f %% flagged" %
+                                          (s,
+                                           source_scan_info[field_id][s]["scan_end"] -
+                                           source_scan_info[field_id][s]["scan_start"],
+                                           flagged / count * 100.0
+                                           ))
+            # Print some stats per antenna
+            ant_flagged = np.zeros([nant])
+            ant_count = np.zeros([nant])
+            for field_i, field_id in enumerate(fields):
+                for s in source_scan_info[field_id]["scan_list"]:
+                        ant_flagged += np.sum(np.sum(source_scan_info[field_id][s]["tot_flagged"],
+                                                     axis=1),
+                                              axis=1)
+                        ant_count += np.sum(np.sum(source_scan_info[field_id][s]["tot_rowcount"],
+                                                     axis=1),
+                                              axis=1)
+
+            politsiyakat.log.info("The following antennae were present in this observation:")
+            for ant in xrange(nant):
+                politsiyakat.log.info("\tAntenna %s is %.2f %% flagged" %
+                                      (antnames[ant], ant_flagged[ant] / ant_count[ant] * 100.0))
+
+            # Create waterfall plots
+            politsiyakat.log.info("Creating waterfall plots:")
+            politsiyakat.log.info("\tInterpolating onto a common axis...")
+            obs_start = np.inf
+            obs_end = -np.inf
+            for field_i, field_id in enumerate(fields):
+                for s in source_scan_info[field_id]["scan_list"]:
+                    obs_end = max(obs_end,
+                        source_scan_info[field_id][s]["scan_end"])
+                    obs_start = min(obs_start,
+                        source_scan_info[field_id][s]["scan_start"])
+            try:
+                heatmaps = sha([len(fields), nant, ncorr, 512, nchan * nspw])
+                famp = {}
+                for field_i, field_id in enumerate(fields):
+                    sh = [len(source_scan_info[field_id]["scan_list"]), nant, nchan * nspw, ncorr]
+                    if np.prod(np.array(sh)) == 0:
+                        continue # nothing to do
+                    famp[field_i] = sha(sh)
+                    for si, s in enumerate(source_scan_info[field_id]["scan_list"]):
+                        famp[field_i].array[si, :, :, :] = \
+                            np.divide(source_scan_info[field_id][s]["tot_autopower"],
+                                      source_scan_info[field_id][s]["tot_rowcount"])
+
+                    for si, s in enumerate(source_scan_info[field_id]["scan_list"]):
+                        scan_mid = np.array([0.5 * (source_scan_info[field_id][s]["scan_end"] -
+                                                    source_scan_info[field_id][s]["scan_start"]) - obs_start])
+                        for ant in xrange(nant):
+                            politsiyakat.pool.submit_to_epic("waterfall plots",
+                                                             _wkr_ant_corr_regrid,
+                                                             source_names[field_id],
+                                                             field_i,
+                                                             ncorr,
+                                                             nchan,
+                                                             nspw,
+                                                             obs_end,
+                                                             obs_start,
+                                                             scan_mid,
+                                                             famp,
+                                                             antnames,
+                                                             heatmaps,
+                                                             ant)
+                politsiyakat.pool.collect_epic("waterfall plots")
+                politsiyakat.log.info("\t\t Done...")
+                for field_i, field_id in enumerate(fields):
+                    for corr in xrange(ncorr):
+                        nxplts = int(np.ceil(np.sqrt(nant)))
+                        nyplts = int(np.ceil(nant / nxplts))
+                        f, axarr = plt.subplots(nyplts, nxplts, dpi=600, figsize=(nyplts*4,nxplts*4))
+                        for ant in xrange(nant):
+                            im = axarr[ant // nxplts, ant % nxplts].imshow(
+                                10*np.log10(heatmaps.array[field_id, ant, corr, :, :]),
+                                aspect = 'auto',
+                                extent = [0, nchan * nspw,
+                                          0, (obs_end - obs_start) / 3600.0])
+                            plt.colorbar(im, ax = axarr[ant // nxplts, ant % nxplts])
+                            axarr[ant // nxplts, ant % nxplts].set_title(antnames[ant])
+                        f.savefig(output_dir + "/%s-AUTOCORR-FIELD-%s-CORR-%d.png" %
+                                    (os.path.basename(ms),
+                                     source_names[field_id],
+                                     corr))
+                        plt.close(f)
+                politsiyakat.log.info("\t\t Saved to %s" % output_dir)
+
+            finally:
+                heatmaps.unlink()
+                for a in famp.keys():
+                    famp[a].unlink()
+
+
+
+def _wk_per_ant_stats(a,
+                      ncorr,
+                      nchan,
+                      spw,
+                      field_id,
+                      s,
+                      data,
+                      source_scan_info):
+    field_sel = data["field"] == field_id
+    scan_sel = data["scan"] == s
+    accum_sel = np.logical_and(field_sel, scan_sel)
+    spw_sel = data["spw"] == spw
+    accum_sel = np.logical_and(accum_sel, spw_sel)
+    accum_sel_tiled = np.tile(accum_sel, (ncorr, nchan, 1)).T
+
+    sel = np.logical_and(accum_sel_tiled,
+                         np.logical_and(np.logical_not(data["flag"]),
+                                        np.tile(np.logical_and(data["a1"] == data["a2"],
+                                                               data["a1"] == a),
+                                                (ncorr, nchan, 1)).T))
+    dn = data["data"].copy()
+    dn[np.logical_not(sel)] = np.nan
+    d = np.abs(dn)
+    f = np.logical_and(data["flag"], sel)
+
+    autopow = np.nansum(d, axis=0)
+    autocount = np.sum(f, axis=0)
+    sel = np.tile(np.logical_and(accum_sel,
+                                 np.logical_or(data["a1"] == a,
+                                               data["a2"] == a)),
+                  (ncorr, nchan, 1)).T
+    f = np.logical_and(data["flag"], sel)
+    totflagged = np.sum(f, axis=0)
+    totrowcount = np.sum(sel, axis=0)
+    return ("antstat", a, spw, autopow, autocount, totflagged, totrowcount)
+
+def _wk_per_bl_stats(bl,
+                     nant,
+                     ncorr,
+                     nchan,
+                     spw,
+                     field_id,
+                     s,
+                     data,
+                     accum_sel,
+                     accum_sel_tiled,
+                     source_scan_info):
+    sel = np.logical_and(accum_sel_tiled,
+                         np.logical_and(np.logical_not(data["flag"]),
+                                        np.tile(data["baseline"] == bl,
+                                                (ncorr, nchan, 1)).T))
+    # dn = data["data"]
+    # dn[sel] = np.nan
+    # d = np.abs(dn)
+    # f = data["flag"] * sel
+    # source_scan_info[field_id][s]["tot_autopower"].array[a, nchan * spw:nchan * (spw + 1), :] += \
+    #     np.nansum(d, axis=0)
+    # source_scan_info[field_id][s]["tot_autocount"].array[a, nchan * spw:nchan * (spw + 1), :] += \
+    #     np.sum(sel, axis=0)
+
+
+
+def _wkr_ant_corr_regrid(field_name,
+                         field_i,
+                         ncorr,
+                         nchan,
+                         nspw,
+                         obs_end,
+                         obs_start,
+                         scan_mid,
+                         famp,
+                         antnames,
+                         heatmaps,
+                         ant):
+    for corr in xrange(ncorr):
+        tic = time.time()
+        X, Y = np.linspace(0.0, float(obs_end - obs_start), 512), \
+               np.arange(nchan * nspw)
+
+        heatmap = interp.griddata((np.repeat(scan_mid, nchan * nspw),
+                                   np.tile(np.arange(nchan * nspw),
+                                           [1, famp[field_i].array.shape[0]]).flatten()),
+                                  famp[field_i].array[:, ant, :, corr].flatten(),
+                                  (X[:, None], Y[None, :]),
+                                  method='nearest')
+        heatmaps.array[field_i, ant, corr, :, :] = heatmap
+        toc = time.time()
+    return "\t\tAntenna %s, field %s, waterfall plots created in %.2f seconds" % (antnames[ant], field_name, toc - tic)
