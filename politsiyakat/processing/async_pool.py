@@ -4,13 +4,13 @@ from concurrent.futures import TimeoutError
 from progress.bar import FillingCirclesBar
 
 class async_pool:
-    def __init__(self, n_ioworkers, n_comworkers):
+    def __init__(self, n_ioworkers, n_comworkers, report_progress = True):
         self.__ppool = ProcessPoolExecutor(max_workers=n_comworkers)
         self.__iopool = ThreadPoolExecutor(max_workers=n_ioworkers)
         self.__ncomworkers = n_comworkers
         self.__nioworkers = n_ioworkers
         self.__epics = {}
-
+        self.__repprog = report_progress
     @property
     def num_com_workers(self):
         return self.__ncomworkers
@@ -47,22 +47,28 @@ class async_pool:
         if epic_name not in self.__epics.keys():
             raise KeyError("Cannot find named epic '%s'" % epic_name)
 
-        bar = FillingCirclesBar("Processing epic '%s'" % epic_name, max=len(self.__epics[epic_name]))
-        bar.start()
-        results = []
-        j = 0
-        while j < len(self.__epics[epic_name]):
-            try:
-                results.append(self.__epics[epic_name][j].result(timeout=1))
-                self.__epics[epic_name].remove(self.__epics[epic_name][j])
-                if len(self.__epics[epic_name]) > 0:
-                    j %= len(self.__epics[epic_name])
-                else:
-                    j = 0
-                bar.next()
-            except TimeoutError:
-                j = (j + 1) % len(self.__epics[epic_name])
-        bar.finish()
+        if self.__repprog:
+            bar = FillingCirclesBar("Processing epic '%s'" % epic_name, max=len(self.__epics[epic_name]))
+            bar.start()
+            results = []
+            j = 0
+            while j < len(self.__epics[epic_name]):
+                try:
+                    results.append(self.__epics[epic_name][j].result(timeout=1))
+                    self.__epics[epic_name].remove(self.__epics[epic_name][j])
+                    if len(self.__epics[epic_name]) > 0:
+                        j %= len(self.__epics[epic_name])
+                    else:
+                        j = 0
+                    bar.next()
+                except TimeoutError:
+                    j = (j + 1) % len(self.__epics[epic_name])
+            bar.finish()
+        else:
+            results = []
+            for f in self.__epics[epic_name]:
+                results.append(f.result())
+            self.__epics[epic_name] = []
         return results
 
     def shutdown(self):

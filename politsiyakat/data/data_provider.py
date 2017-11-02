@@ -115,6 +115,7 @@ class data_provider:
         self.__ms_meta = data_provider.check_ms(**kwargs)
         self.__nchunk = self.__ms_meta["nchunk"]
         self.__read_exclude = []  # everything by default
+        self.__old_read_exclude = []  # everything by default
         self.__releasehandles = []
         self.__maintable_chunk = self.__alloc_buffer()
         self.__double_buffer = self.__alloc_buffer()
@@ -168,6 +169,10 @@ class data_provider:
         return self.__nchunk
 
     def __iter__(self):
+        if (self.__ichunk != self.__nchunk - 1) or \
+           (len([v for v in self.__old_read_exclude if v not in self.__read_exclude]) != 0):
+            self.__nxchunk_wkr = None
+            self.__dbchunk_wkr = None
         self.__ichunk = 0
         return self
 
@@ -198,6 +203,7 @@ class data_provider:
                                                                 self.__data_column
                                                                )
                 self.__rows_read = self.__nxchunk_wkr.result()
+                self.__old_read_exclude = self.__read_exclude
                 self.__dbchunk_wkr = politsiyakat.pool.submit_io(politsiyakat.data.data_provider._read_buffer,
                                                                 self.__ms,
                                                                 self.__read_exclude,
@@ -209,6 +215,7 @@ class data_provider:
             else:
                 # swap buffers and start loading next buffer
                 self.__rows_read = self.__dbchunk_wkr.result()
+                self.__old_read_exclude = self.__read_exclude
                 o_dbf = self.__maintable_chunk
                 self.__maintable_chunk = self.__double_buffer
                 self.__double_buffer = o_dbf
