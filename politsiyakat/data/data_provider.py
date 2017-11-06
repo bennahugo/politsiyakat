@@ -21,6 +21,11 @@ import politsiyakat
 import os
 from politsiyakat.data.misc import *
 from shared_ndarray import SharedNDArray as sha
+'''
+Enumeration of stokes and correlations used in MS2.0 - as per Stokes.h in casacore, the rest are left unimplemented:
+These are useful when working with visibility data (https://casa.nrao.edu/Memos/229.html#SECTION000613000000000000000)
+'''
+stokes_types = ['Undef', 'I', 'Q', 'U', 'V', 'RR', 'RL', 'LR', 'LL', 'XX', 'XY', 'YX', 'YY']
 
 class data_provider:
     @classmethod
@@ -64,6 +69,10 @@ class data_provider:
 
         with table(ms + "::FIELD", readonly=True, ack=False) as t:
             ms_meta["ms_field_names"] = t.getcol("NAME")
+
+        with table(ms + "::POLARIZATION", readonly=True, ack=False) as t:
+            feeds = [stokes_types[t] for t in t.getcell("CORR_TYPE", 0)]
+            ms_meta["ms_feed_names"] = feeds
 
         with table(ms + "::SPECTRAL_WINDOW", readonly=True, ack=False) as t:
             ms_meta["nspw"] = t.nrows()

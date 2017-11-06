@@ -111,9 +111,11 @@ def main(argv = None):
     log.info("Running task '%s' with the following arguments:" % args.task)
     for (key, val) in args.kwargs.iteritems():
         log.info("\t%s:%s" % (key, val))
+    try:
+        run_func(**args.kwargs)
+        return 0
+    finally:
+        log.info("Waiting for remaining jobs to finish...")
+        pool.shutdown()
 
-    run_func(**args.kwargs)
-    log.info("Waiting for remaining jobs to finish...")
-    pool.shutdown()
-    log.info("PolitsiyaKAT terminated successfully")
-    return 0
+
