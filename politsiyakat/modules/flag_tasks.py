@@ -19,18 +19,12 @@
 
 
 import os
-import numpy as np
 import politsiyakat
 import re
 from matplotlib import pyplot as plt
 import scipy.interpolate as interp
-import matplotlib as mpl
-import matplotlib.cm as cm
 from politsiyakat.data.misc import *
 from politsiyakat.data.data_provider import data_provider
-from shared_ndarray import SharedNDArray as sha
-import concurrent
-import time
 
 class antenna_tasks:
     """
@@ -73,13 +67,13 @@ class antenna_tasks:
         try:
             DATA = str(kwargs["data_column"])
         except:
-            raise ValueError("flag_autocorr_drifts expects a data column (key 'data_column') as input")
+            raise ValueError("flag_phase_drifts expects a data column (key 'data_column') as input")
         try:
             if not re.match(r"^[0-9]+(?:,[0-9]+)*$", kwargs["field"]):
                 raise ValueError("Expect list of field identifiers")
             fields = [int(f) for f in kwargs["field"].split(",")]
         except:
-            raise ValueError("flag_autocorr_drifts expects field(s) (key "
+            raise ValueError("flag_phase_drifts expects field(s) (key "
                              "'field') as input")
 
         try:
@@ -87,12 +81,12 @@ class antenna_tasks:
                 raise ValueError("Expect list of field identifiers")
             cal_fields = [int(f) for f in kwargs["cal_field"].split(",")]
         except:
-            raise ValueError("flag_autocorr_drifts expects calibrator field(s) (key "
+            raise ValueError("flag_phase_drifts expects calibrator field(s) (key "
                              "'cal_field') as input")
         try:
             nrows_to_read = int(kwargs["nrows_chunk"])
         except:
-            raise ValueError("flag_autocorr_drifts expects number of rows to read per chunk "
+            raise ValueError("flag_phase_drifts expects number of rows to read per chunk "
                              "(key 'nrows_chunk') as input")
         try:
             simulate = bool(kwargs["simulate"])
@@ -104,25 +98,25 @@ class antenna_tasks:
                                       "touch your data.")
 
         except:
-            raise ValueError("flag_autocorr_drifts expects simulate flag "
+            raise ValueError("flag_phase_drifts expects simulate flag "
                              "(key 'simulate') as input")
 
         try:
             output_dir = str(kwargs["output_dir"])
         except:
-            raise ValueError("flag_autocorr_drifts expects an output_directory "
+            raise ValueError("flag_phase_drifts expects an output_directory "
                              "(key 'output_dir') as input")
 
         try:
             s2s_sigma = float(kwargs["scan_to_scan_threshold"])
         except:
-            raise ValueError("flag_autocorr_drifts expect a scan to scan variation threshold (sigma) "
+            raise ValueError("flag_phase_drifts expect a scan to scan variation threshold (sigma) "
                              "(key 'scan_to_scan_threshold') as input")
 
         try:
             b2g_sigma = float(kwargs["baseline_to_group_threshold"])
         except:
-            raise ValueError("flag_autocorr_drifts expect a sigma threshold for antenna variation from group"
+            raise ValueError("flag_phase_drifts expect a sigma threshold for antenna variation from group"
                              "(key 'baseline_to_group_threshold') as input")
 
         try:
@@ -235,17 +229,16 @@ class antenna_tasks:
                                                                  field_id,
                                                                  s,
                                                                  data)
-                            if field_id in cal_fields: # no need to compute per-bl stats for non-cal fields
-                                for bl in xrange(no_baselines):
-                                    politsiyakat.pool.submit_to_epic(epic_name,
-                                                                     _wk_per_bl_phase_stats,
-                                                                     bl,
-                                                                     ncorr,
-                                                                     nchan,
-                                                                     spw,
-                                                                     field_id,
-                                                                     s,
-                                                                     data)
+                            for bl in xrange(no_baselines):
+                                politsiyakat.pool.submit_to_epic(epic_name,
+                                                                 _wk_per_bl_phase_stats,
+                                                                 bl,
+                                                                 ncorr,
+                                                                 nchan,
+                                                                 spw,
+                                                                 field_id,
+                                                                 s,
+                                                                 data)
                             res = politsiyakat.pool.collect_epic(epic_name)
                             for r in res:
                                 if r[0] == "antstat":
@@ -341,7 +334,7 @@ class antenna_tasks:
                 politsiyakat.log.info("\tField %s:" % source_names[field_id])
                 for si, s in enumerate(source_scan_info[field_id]["scan_list"]):
                     flg = np.nansum(np.nansum(flg_intra_bl[field_id][si], axis=0),
-                                 axis=0)
+                                    axis=0)
                     cnt = float(no_baselines * nchan)
                     politsiyakat.log.info("\t\tScan %s is [%s] %% flagged" %
                                           (s, ",".join([str(v) for v in flg / cnt * 100.0])))
@@ -433,23 +426,39 @@ class antenna_tasks:
                                            antenna_positions)
             ranked_uv_dist = np.argsort(uv_dist)
             for field_i, field_id in enumerate(fields):
+                if field_id not in cal_fields:
+                    continue
                 politsiyakat.log.info("\tField %s:" % source_names[field_id])
+                noplots = len(source_scan_info[field_id]["scan_list"])
+                nxplts = int(np.ceil(np.sqrt(noplots)))
+                nyplts = int(np.ceil(noplots / float(nxplts)))
+                f, axarr = plt.subplots(nxplts,
+                                        nyplts,
+                                        dpi=dpi, figsize=(nxplts * plt_size, nyplts * plt_size),
+                                        sharex=True, sharey=True)
+                if not isinstance(axarr, np.ndarray):
+                    arplt = np.empty((1,1), dtype=object)
+                    arplt[0,0] = axarr
+                    axarr = arplt
+                axarr = axarr.reshape([nyplts, nxplts]) # ensure 2d array.. bug in mpl
                 for si, s in enumerate(source_scan_info[field_id]["scan_list"]):
                     politsiyakat.log.info("\t\tScan %s..." % s)
-                    fig = plt.figure(dpi=dpi, figsize=(plt_size, plt_size))
+
                     for c in xrange(ncorr):
-                        plt.plot(uv_dist[ranked_uv_dist], np.sum(new_flags[field_id][s][ranked_uv_dist, :, c],
-                                                                 axis=1), label=ms_meta["ms_feed_names"][c])
-                    plt.title("Flag excessive phase error (%s, scan %d) " % (source_names[field_id],
-                                                                             s))
-                    plt.xlabel("UVdist (m)")
-                    plt.ylabel("Number of channels flagged")
-                    plt.legend()
-                    fig.savefig(output_dir + "/%s-FLAGGED_PHASE_UVDIST.CALFIELD_%s.SCAN_%d.png" %
-                                (os.path.basename(ms),
-                                 source_names[field_id],
-                                 s))
-                    plt.close(fig)
+                        axarr[si // nxplts, si % nxplts].plot(uv_dist[ranked_uv_dist],
+                                                              np.sum(new_flags[field_id][s][ranked_uv_dist, :, c],
+                                                                     axis=1),
+                                                              label=ms_meta["ms_feed_names"][c])
+                    axarr[si // nxplts, si % nxplts].set_title("scan %d" % s)
+                    leg = axarr[si // nxplts, si % nxplts].legend()
+                    leg.get_frame().set_alpha(0.5)
+                f.text(0.5, 0.94, "FIELD: %s" % source_names[field_id], ha='center')
+                f.text(0.5, 0.04, 'UVdist (m)', ha='center')
+                f.text(0.04, 0.5, 'Number of channels flagged', va='center', rotation='vertical')
+                f.savefig(output_dir + "/%s-FLAGGED_PHASE_UVDIST.CALFIELD_%s.png" %
+                            (os.path.basename(ms),
+                             source_names[field_id]))
+                plt.close(f)
 
             # Create phase waterfall plots
             politsiyakat.log.info("Creating waterfall plots:")
@@ -462,75 +471,78 @@ class antenna_tasks:
                                   source_scan_info[field_id][s]["scan_end"])
                     obs_start = min(obs_start,
                                     source_scan_info[field_id][s]["scan_start"])
-            try:
-                heatmaps = sha([len(fields), no_baselines, ncorr, 128, nchan * nspw])
-                fph = {}
-                for field_i, field_id in enumerate(fields):
-                    sh = [len(source_scan_info[field_id]["scan_list"]), no_baselines, nchan * nspw, ncorr]
 
-                    if np.prod(np.array(sh)) == 0:
-                        continue  # nothing to do
-                    fph[field_i] = sha(sh)
-                    scan_mid = np.zeros([len(source_scan_info[field_id]["scan_list"])])
-                    for si, s in enumerate(source_scan_info[field_id]["scan_list"]):
-                        fph[field_i].array[si, :, :, :] = \
-                            np.divide(source_scan_info[field_id][s]["sum_phase"],
-                                      source_scan_info[field_id][s]["count_phase"])
-                        fph[field_i].array[si, :, :, :][new_flags[field_id][s]] = np.nan
-                        scan_mid[si] = np.array([0.5 * (source_scan_info[field_id][s]["scan_end"] -
-                                                        source_scan_info[field_id][s]["scan_start"]) - obs_start])
+            heatmaps = np.zeros([len(fields), no_baselines, ncorr, 128, nchan * nspw])
+            fph = {}
+            for field_i, field_id in enumerate(fields):
+                sh = [len(source_scan_info[field_id]["scan_list"]), no_baselines, nchan * nspw, ncorr]
+
+                if np.prod(np.array(sh)) == 0:
+                    continue  # nothing to do
+                fph[field_i] = np.zeros(sh)
+                scan_mid = np.zeros([len(source_scan_info[field_id]["scan_list"])])
+                for si, s in enumerate(source_scan_info[field_id]["scan_list"]):
+                    fph[field_i][si, :, :, :] = \
+                        np.divide(source_scan_info[field_id][s]["sum_phase"],
+                                  source_scan_info[field_id][s]["count_phase"])
+                    scan_mid[si] = np.array([0.5 * (source_scan_info[field_id][s]["scan_end"] -
+                                                    source_scan_info[field_id][s]["scan_start"]) - obs_start])
+
+                for bl in xrange(no_baselines):
+                    politsiyakat.pool.submit_to_epic("waterfall plots",
+                                                     _wkr_bl_corr_regrid,
+                                                     source_names[field_id],
+                                                     field_i,
+                                                     ncorr,
+                                                     nchan,
+                                                     nspw,
+                                                     obs_end,
+                                                     obs_start,
+                                                     scan_mid,
+                                                     fph,
+                                                     antnames,
+                                                     heatmaps,
+                                                     bl)
+                politsiyakat.pool.collect_epic("waterfall plots")
+                politsiyakat.log.info("\t\t Done...")
+
+                for corr in xrange(ncorr):
+                    nxplts = int(np.ceil(np.sqrt(no_baselines)))
+                    nyplts = int(np.ceil(no_baselines / float(nxplts)))
+                    f, axarr = plt.subplots(nyplts,
+                                            nxplts,
+                                            dpi=dpi,
+                                            figsize=(nyplts * plt_size, nxplts * plt_size),
+                                            sharex=True, sharey=True)
+
+                    scale_min = np.nanmin(heatmaps[field_i, :, corr, :, :])
+                    scale_max = np.nanmax(heatmaps[field_i, :, corr, :, :])
 
                     for bl in xrange(no_baselines):
-                        politsiyakat.pool.submit_to_epic("waterfall plots",
-                                                         _wkr_bl_corr_regrid,
-                                                         source_names[field_id],
-                                                         field_i,
-                                                         ncorr,
-                                                         nchan,
-                                                         nspw,
-                                                         obs_end,
-                                                         obs_start,
-                                                         scan_mid,
-                                                         fph,
-                                                         antnames,
-                                                         heatmaps,
-                                                         bl)
-                    politsiyakat.pool.collect_epic("waterfall plots")
-                    politsiyakat.log.info("\t\t Done...")
-                    for corr in xrange(ncorr):
-                        nxplts = int(np.ceil(np.sqrt(no_baselines)))
-                        nyplts = int(np.ceil(no_baselines / float(nxplts)))
-                        f, axarr = plt.subplots(nyplts, nxplts, dpi=dpi, figsize=(nyplts * plt_size,
-                                                                                  nxplts * plt_size))
+                        z = heatmaps[field_i, bl, corr, :, :]
 
-                        scale_min = np.nanmin(heatmaps.array[field_i, :, corr, :, :])
-                        scale_max = np.nanmax(heatmaps.array[field_i, :, corr, :, :])
+                        im = axarr[bl // nxplts, bl % nxplts].imshow(
+                            z,
+                            aspect='auto',
+                            extent=[0, nchan * nspw,
+                                    0, (obs_end - obs_start) / 3600.0],
+                            vmin=scale_min,
+                            vmax=scale_max)
+                        plt.colorbar(im, ax=axarr[bl // nxplts, bl % nxplts])
+                        a1, a2 = ants_from_baseline(bl,nant)
+                        a1n = antnames[a1]
+                        a2n = antnames[a2]
+                        axarr[bl // nxplts, bl % nxplts].set_title("%s & %s" % (a1n, a2n))
+                    f.text(0.5, 0.94, "FIELD: %s" % source_names[field_id], ha='center')
+                    f.text(0.5, 0.04, 'channel', ha='center')
+                    f.text(0.04, 0.5, 'Time (hrs)', va='center', rotation='vertical')
+                    f.savefig(output_dir + "/%s-PHASE-FIELD-%s-CORR-%d.png" %
+                              (os.path.basename(ms),
+                               source_names[field_id],
+                               corr))
+                    plt.close(f)
+            politsiyakat.log.info("\t\t Saved to %s" % output_dir)
 
-                        for bl in xrange(no_baselines):
-                            z = heatmaps.array[field_i, bl, corr, :, :]
-
-                            im = axarr[bl // nxplts, bl % nxplts].imshow(
-                                z,
-                                aspect='auto',
-                                extent=[0, nchan * nspw,
-                                        0, (obs_end - obs_start) / 3600.0],
-                                vmin=scale_min,
-                                vmax=scale_max)
-                            plt.colorbar(im, ax=axarr[bl // nxplts, bl % nxplts])
-                            a1n = antnames[bl % nant]
-                            a2n = antnames[bl / nant]
-                            axarr[bl // nxplts, bl % nxplts].set_title("%s & %s" % (a1n, a2n))
-
-                        f.savefig(output_dir + "/%s-PHASE-FIELD-%s-CORR-%d.png" %
-                                  (os.path.basename(ms),
-                                   source_names[field_id],
-                                   corr))
-                        plt.close(f)
-                politsiyakat.log.info("\t\t Saved to %s" % output_dir)
-            finally:
-                heatmaps.unlink()
-                for a in fph.keys():
-                    fph[a].unlink()
 
     @classmethod
     def flag_autocorr_drifts(cls, **kwargs):
@@ -617,8 +629,8 @@ class antenna_tasks:
         try:
             dpi = str(kwargs["plot_dpi"])
         except:
-            dpi = 600
-            politsiyakat.log.warn("Warning: defaulting to plot dpi of 600. Keyword 'plot_dpi' "
+            dpi = 300
+            politsiyakat.log.warn("Warning: defaulting to plot dpi of 300. Keyword 'plot_dpi' "
                                   "can be used to control this behaviour.")
 
         try:
@@ -844,8 +856,8 @@ class antenna_tasks:
                         has_updated = True
                         politsiyakat.log.info("\t\tUpdating flags for scan %d" % s)
                         # per antenna, all spw one go
+                        epic_name = 'antenna flag update for %s' % source_names[field_id]
                         for a in xrange(nant):
-                            epic_name = 'antenna flag update for %s' % source_names[field_id]
                             politsiyakat.pool.submit_to_epic(epic_name,
                                                              _wk_per_ant_update,
                                                              a,
@@ -874,77 +886,77 @@ class antenna_tasks:
                         source_scan_info[field_id][s]["scan_end"])
                     obs_start = min(obs_start,
                         source_scan_info[field_id][s]["scan_start"])
-            try:
-                heatmaps = sha([len(fields), nant, ncorr, 512, nchan * nspw])
-                famp = {}
-                for field_i, field_id in enumerate(fields):
-                    sh = [len(source_scan_info[field_id]["scan_list"]), nant, nchan * nspw, ncorr]
 
-                    if np.prod(np.array(sh)) == 0:
-                        continue # nothing to do
-                    famp[field_i] = sha(sh)
-                    scan_mid =  np.zeros([len(source_scan_info[field_id]["scan_list"])])
-                    for si, s in enumerate(source_scan_info[field_id]["scan_list"]):
-                        newf = np.logical_or(field_scan_flags_intra[field_id][si],
-                                             field_scan_flags_inter[field_id][si])
-                        famp[field_i].array[si, :, :, :] = \
-                            np.divide(source_scan_info[field_id][s]["tot_autopower"],
-                                      source_scan_info[field_id][s]["tot_rowcount"])
-                        famp[field_i].array[si][newf] = np.nan
-                        scan_mid[si] = np.array([0.5 * (source_scan_info[field_id][s]["scan_end"] -
-                                                        source_scan_info[field_id][s]["scan_start"]) - obs_start])
+            heatmaps = np.zeros([len(fields), nant, ncorr, 512, nchan * nspw])
+            famp = {}
+            for field_i, field_id in enumerate(fields):
+                sh = [len(source_scan_info[field_id]["scan_list"]), nant, nchan * nspw, ncorr]
+
+                if np.prod(np.array(sh)) == 0:
+                    continue # nothing to do
+                famp[field_i] = np.zeros(sh)
+                scan_mid =  np.zeros([len(source_scan_info[field_id]["scan_list"])])
+                for si, s in enumerate(source_scan_info[field_id]["scan_list"]):
+                    famp[field_i][si, :, :, :] = \
+                        np.divide(source_scan_info[field_id][s]["tot_autopower"],
+                                  source_scan_info[field_id][s]["tot_rowcount"])
+                    scan_mid[si] = [0.5 * (source_scan_info[field_id][s]["scan_end"] -
+                                           source_scan_info[field_id][s]["scan_start"]) - obs_start]
 
 
+                for ant in xrange(nant):
+                    politsiyakat.pool.submit_to_epic("waterfall plots",
+                                                     _wkr_ant_corr_regrid,
+                                                     source_names[field_id],
+                                                     field_i,
+                                                     ncorr,
+                                                     nchan,
+                                                     nspw,
+                                                     obs_end,
+                                                     obs_start,
+                                                     scan_mid,
+                                                     famp,
+                                                     antnames,
+                                                     heatmaps,
+                                                     ant)
+                politsiyakat.pool.collect_epic("waterfall plots")
+                politsiyakat.log.info("\t\t Done...")
+                for corr in xrange(ncorr):
+                    nxplts = int(np.ceil(np.sqrt(nant)))
+                    nyplts = int(np.ceil(nant / float(nxplts)))
+                    f, axarr = plt.subplots(nyplts,
+                                            nxplts,
+                                            dpi=dpi,
+                                            figsize=(nyplts*plt_size, nxplts*plt_size),
+                                            sharex=True, sharey=True)
+                    dbheatmaps = 10 * np.log10(heatmaps[:, :, :, :, :])
+                    #sanatize
+                    dbheatmaps[dbheatmaps == -np.inf] = np.nan
+                    dbheatmaps[dbheatmaps == np.inf] = np.nan
+                    scale_min = np.nanmin(dbheatmaps[field_i, :, corr, :, :])
+                    scale_max = np.nanmax(dbheatmaps[field_i, :, corr, :, :])
                     for ant in xrange(nant):
-                        politsiyakat.pool.submit_to_epic("waterfall plots",
-                                                         _wkr_ant_corr_regrid,
-                                                         source_names[field_id],
-                                                         field_i,
-                                                         ncorr,
-                                                         nchan,
-                                                         nspw,
-                                                         obs_end,
-                                                         obs_start,
-                                                         scan_mid,
-                                                         famp,
-                                                         antnames,
-                                                         heatmaps,
-                                                         ant)
-                    politsiyakat.pool.collect_epic("waterfall plots")
-                    politsiyakat.log.info("\t\t Done...")
-                    for corr in xrange(ncorr):
-                        nxplts = int(np.ceil(np.sqrt(nant)))
-                        nyplts = int(np.ceil(nant / float(nxplts)))
-                        f, axarr = plt.subplots(nyplts, nxplts, dpi=dpi, figsize=(nyplts*plt_size,
-                                                                                  nxplts*plt_size))
-                        dbheatmaps = 10 * np.log10(heatmaps.array[:, :, :, :, :])
-                        #sanatize
-                        dbheatmaps[dbheatmaps == -np.inf] = np.nan
-                        dbheatmaps[dbheatmaps == np.inf] = np.nan
-                        scale_min = np.nanmin(dbheatmaps[field_i, :, corr, :, :])
-                        scale_max = np.nanmax(dbheatmaps[field_i, :, corr, :, :])
-                        for ant in xrange(nant):
-                            dbscale = dbheatmaps[field_i, ant, corr, :, :]
+                        dbscale = dbheatmaps[field_i, ant, corr, :, :]
 
-                            im = axarr[ant // nxplts, ant % nxplts].imshow(
-                                dbscale,
-                                aspect = 'auto',
-                                extent = [0, nchan * nspw,
-                                          0, (obs_end - obs_start) / 3600.0],
-                                vmin = scale_min,
-                                vmax = scale_max)
-                            plt.colorbar(im, ax = axarr[ant // nxplts, ant % nxplts])
-                            axarr[ant // nxplts, ant % nxplts].set_title(antnames[ant])
-                        f.savefig(output_dir + "/%s-AUTOCORR-FIELD-%s-CORR-%d.png" %
-                                    (os.path.basename(ms),
-                                     source_names[field_id],
-                                     corr))
-                        plt.close(f)
-                politsiyakat.log.info("\t\t Saved to %s" % output_dir)
-            finally:
-                heatmaps.unlink()
-                for a in famp.keys():
-                    famp[a].unlink()
+                        im = axarr[ant // nxplts, ant % nxplts].imshow(
+                            dbscale,
+                            aspect = 'auto',
+                            extent = [0, nchan * nspw,
+                                      0, (obs_end - obs_start) / 3600.0],
+                            vmin = scale_min,
+                            vmax = scale_max)
+                        plt.colorbar(im, ax = axarr[ant // nxplts, ant % nxplts])
+                        axarr[ant // nxplts, ant % nxplts].set_title(antnames[ant])
+                    f.text(0.0, 0.94, "FIELD: %s" % source_names[field_id], ha='left')
+                    f.text(0.5, 0.04, 'channel', ha='center')
+                    f.text(0.04, 0.5, 'Time (hrs)', va='center', rotation='vertical')
+                    f.savefig(output_dir + "/%s-AUTOCORR-FIELD-%s-CORR-%d.png" %
+                                (os.path.basename(ms),
+                                 source_names[field_id],
+                                 corr))
+                    plt.close(f)
+            politsiyakat.log.info("\t\t Saved to %s" % output_dir)
+
 
 ######################################################
 # WORKERS
@@ -963,12 +975,10 @@ def _wk_per_ant_update(a,
                             nrow_per_chunk)
         chunk_start = n * nrow_per_chunk
         chunk_end = n * nrow_per_chunk + nrows_to_read
-        field_sel = data["field"][chunk_start:chunk_end] == field_id
         scan_sel = data["scan"][chunk_start:chunk_end] == s
-        accum_sel = np.logical_and(field_sel, scan_sel)
         ant_sel = np.logical_or(data["a1"][chunk_start:chunk_end] == a,
                                 data["a2"][chunk_start:chunk_end] == a)
-        accum_sel = np.logical_and(accum_sel, ant_sel)
+        accum_sel = np.logical_and(scan_sel, ant_sel)
         newf = np.logical_or(field_scan_flags_intra[field_id][si][a],
                              field_scan_flags_inter[field_id][si][a])
         data["flag"][np.argwhere(accum_sel)][chunk_start:chunk_end] = \
@@ -989,11 +999,9 @@ def _wk_per_bl_update(bl,
                             nrow_per_chunk)
         chunk_start = n * nrow_per_chunk
         chunk_end = n * nrow_per_chunk + nrows_to_read
-        field_sel = data["field"][chunk_start:chunk_end] == field_id
         scan_sel = data["scan"][chunk_start:chunk_end] == s
-        accum_sel = np.logical_and(field_sel, scan_sel)
         bl_sel = data["baseline"][chunk_start:chunk_end] == bl
-        accum_sel = np.logical_and(accum_sel, bl_sel)
+        accum_sel = np.logical_and(scan_sel, bl_sel)
         data["flag"][np.argwhere(accum_sel)][chunk_start:chunk_end] = \
             np.logical_or(data["flag"][np.argwhere(accum_sel)][chunk_start:chunk_end],
                           flgs[bl])
@@ -1016,12 +1024,9 @@ def _wk_per_ant_flag_stats(a,
                             nrow_per_chunk)
         chunk_start = n * nrow_per_chunk
         chunk_end = n * nrow_per_chunk + nrows_to_read
-
-        field_sel = data["field"][chunk_start:chunk_end] == field_id
         scan_sel = data["scan"][chunk_start:chunk_end] == s
-        accum_sel = np.logical_and(field_sel, scan_sel)
         spw_sel = data["spw"][chunk_start:chunk_end] == spw
-        accum_sel = np.logical_and(accum_sel, spw_sel)
+        accum_sel = np.logical_and(scan_sel, spw_sel)
 
         # get flagging statistics per antenna
         antsel = np.logical_or(data["a1"][chunk_start:chunk_end] == a,
@@ -1059,12 +1064,9 @@ def _wk_per_bl_phase_stats(bl,
                             nrow_per_chunk)
         chunk_start = n * nrow_per_chunk
         chunk_end = n * nrow_per_chunk + nrows_to_read
-
-        field_sel = data["field"][chunk_start:chunk_end] == field_id
         scan_sel = data["scan"][chunk_start:chunk_end] == s
-        accum_sel = np.logical_and(field_sel, scan_sel)
         spw_sel = data["spw"][chunk_start:chunk_end] == spw
-        accum_sel = np.logical_and(accum_sel, spw_sel)
+        accum_sel = np.logical_and(scan_sel, spw_sel)
         bl_sel = data["baseline"][chunk_start:chunk_end] == bl
         accum_sel = np.logical_and(accum_sel, bl_sel)
         accum_sel_tiled = np.tile(accum_sel, (ncorr, nchan, 1)).T
@@ -1074,7 +1076,7 @@ def _wk_per_bl_phase_stats(bl,
 
         dn = data["data"][chunk_start:chunk_end].copy()
         dn[np.logical_not(sel)] = np.nan
-        d = np.angle(dn)
+        d = np.rad2deg(np.angle(dn))
         # expecting 0 rad phase angle for calibrators - can weigh by number of samples later when entire scan has
         # been processed
         blchisq += np.nansum(d**2, axis=0)
@@ -1101,12 +1103,9 @@ def _wk_per_ant_stats(a,
                             nrow_per_chunk)
         chunk_start = n*nrow_per_chunk
         chunk_end = n*nrow_per_chunk + nrows_to_read
-
-        field_sel = data["field"][chunk_start:chunk_end] == field_id
         scan_sel = data["scan"][chunk_start:chunk_end] == s
-        accum_sel = np.logical_and(field_sel, scan_sel)
         spw_sel = data["spw"][chunk_start:chunk_end] == spw
-        accum_sel = np.logical_and(accum_sel, spw_sel)
+        accum_sel = np.logical_and(scan_sel, spw_sel)
         accum_sel_tiled = np.tile(accum_sel, (ncorr, nchan, 1)).T
         autocorrs_sel = np.logical_and(data["a1"][chunk_start:chunk_end] == data["a2"][chunk_start:chunk_end],
                                        data["a1"][chunk_start:chunk_end] == a)
@@ -1164,13 +1163,13 @@ def _wkr_ant_corr_regrid(field_name,
                np.arange(nchan * nspw)
         xcoords = np.repeat(scan_mid, nchan * nspw)
         ycoords = np.tile(np.arange(nchan * nspw),
-                          [1, famp[field_i].array.shape[0]]).flatten()
+                          [1, famp[field_i].shape[0]]).flatten()
         heatmap = interp.griddata((xcoords,
                                    ycoords),
-                                  famp[field_i].array[:, ant, :, corr].flatten(),
+                                  famp[field_i][:, ant, :, corr].flatten(),
                                   (X[:, None], Y[None, :]),
                                   method='nearest')
-        heatmaps.array[field_i, ant, corr, :, :] = heatmap
+        heatmaps[field_i, ant, corr, :, :] = heatmap
 
 def _wkr_bl_corr_regrid(field_name,
                         field_i,
@@ -1190,10 +1189,10 @@ def _wkr_bl_corr_regrid(field_name,
                np.arange(nchan * nspw)
         xcoords = np.repeat(scan_mid, nchan * nspw)
         ycoords = np.tile(np.arange(nchan * nspw),
-                          [1, fph[field_i].array.shape[0]]).flatten()
+                          [1, fph[field_i].shape[0]]).flatten()
         heatmap = interp.griddata((xcoords,
                                    ycoords),
-                                  fph[field_i].array[:, bl, :, corr].flatten(),
+                                  fph[field_i][:, bl, :, corr].flatten(),
                                   (X[:, None], Y[None, :]),
                                   method='nearest')
-        heatmaps.array[field_i, bl, corr, :, :] = heatmap
+        heatmaps[field_i, bl, corr, :, :] = heatmap
