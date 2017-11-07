@@ -44,12 +44,7 @@ def create_logger():
     return politsiya_log
 
 log = create_logger()
-
-def create_ppool():
-    """ Creates process pool """
-    return async_pool(2, 4)
-
-pool = create_ppool()
+pool = None
 
 def main(argv = None):
     """ Driver: all tasks invoked from here """
@@ -99,6 +94,20 @@ def main(argv = None):
                              "'{\"msname\":\"helloworld.ms\"}'")
 
     args = parser.parse_args(argv)
+    try:
+        nio_threads = args.kwargs.pop("nio_threads")
+    except:
+        politsiyakat.log.warn("Setting maximum number of IO threads to 1. This behaviour can be controlled "
+                              "via parameter 'nio_threads'")
+        nio_threads = 1
+    try:
+        nproc_threads = args.kwargs.pop("nproc_threads")
+    except:
+        politsiyakat.log.warn("Setting maximum number of worker threads to 1. This behaviour can be controlled "
+                              "via parameter 'nproc_threads'")
+        nproc_threads = 1
+    global pool
+    pool = async_pool(nio_threads, nproc_threads)
 
     if args.tasksuite == "antenna_mod":
         run_func = getattr(flag_tasks, args.task, None)
