@@ -26,7 +26,7 @@ import scipy.interpolate as interp
 from politsiyakat.data.misc import *
 from politsiyakat.data.data_provider import data_provider
 
-class antenna_tasks:
+class flag_tasks:
     """
        Tasks Helper class
 
@@ -398,7 +398,7 @@ class antenna_tasks:
                         if chunk_i not in source_scan_info[field_id][s]["chunk_list"]:
                             continue
                         has_updated = True
-                        flgs = new_flags[field_id][s]
+                        flgs = new_flags[field_id][s].copy()
                         politsiyakat.log.info("\t\tUpdating flags for scan %d" % s)
                         # per antenna, all spw one go
                         epic_name = 'baseline flag update for %s' % source_names[field_id]
@@ -434,8 +434,7 @@ class antenna_tasks:
                 nyplts = int(np.ceil(noplots / float(nxplts)))
                 f, axarr = plt.subplots(nxplts,
                                         nyplts,
-                                        dpi=dpi, figsize=(nxplts * plt_size, nyplts * plt_size),
-                                        sharex=True, sharey=True)
+                                        dpi=dpi, figsize=(nxplts * plt_size, nyplts * plt_size))
                 if not isinstance(axarr, np.ndarray):
                     arplt = np.empty((1,1), dtype=object)
                     arplt[0,0] = axarr
@@ -452,7 +451,7 @@ class antenna_tasks:
                     axarr[si // nxplts, si % nxplts].set_title("scan %d" % s)
                     leg = axarr[si // nxplts, si % nxplts].legend()
                     leg.get_frame().set_alpha(0.5)
-                f.text(0.5, 0.94, "FIELD: %s" % source_names[field_id], ha='center')
+                f.text(0.0, 0.94, "FIELD: %s" % source_names[field_id], ha='left')
                 f.text(0.5, 0.04, 'UVdist (m)', ha='center')
                 f.text(0.04, 0.5, 'Number of channels flagged', va='center', rotation='vertical')
                 f.savefig(output_dir + "/%s-FLAGGED_PHASE_UVDIST.CALFIELD_%s.png" %
@@ -533,7 +532,9 @@ class antenna_tasks:
                         a1n = antnames[a1]
                         a2n = antnames[a2]
                         axarr[bl // nxplts, bl % nxplts].set_title("%s & %s" % (a1n, a2n))
-                    f.text(0.5, 0.94, "FIELD: %s" % source_names[field_id], ha='center')
+                    f.text(0.5, 0.94,
+                           "FIELD: %s, CORR: %s" % (source_names[field_id], ms_meta["ms_feed_names"][corr]),
+                           ha='center')
                     f.text(0.5, 0.04, 'channel', ha='center')
                     f.text(0.04, 0.5, 'Time (hrs)', va='center', rotation='vertical')
                     f.savefig(output_dir + "/%s-PHASE-FIELD-%s-CORR-%d.png" %
@@ -900,8 +901,8 @@ class antenna_tasks:
                     famp[field_i][si, :, :, :] = \
                         np.divide(source_scan_info[field_id][s]["tot_autopower"],
                                   source_scan_info[field_id][s]["tot_rowcount"])
-                    scan_mid[si] = [0.5 * (source_scan_info[field_id][s]["scan_end"] -
-                                           source_scan_info[field_id][s]["scan_start"]) - obs_start]
+                    scan_mid[si] = 0.5 * (source_scan_info[field_id][s]["scan_end"] -
+                                          source_scan_info[field_id][s]["scan_start"]) - obs_start
 
 
                 for ant in xrange(nant):
@@ -947,7 +948,9 @@ class antenna_tasks:
                             vmax = scale_max)
                         plt.colorbar(im, ax = axarr[ant // nxplts, ant % nxplts])
                         axarr[ant // nxplts, ant % nxplts].set_title(antnames[ant])
-                    f.text(0.0, 0.94, "FIELD: %s" % source_names[field_id], ha='left')
+                    f.text(0.5, 0.94,
+                           "FIELD: %s, CORR: %s" % (source_names[field_id], ms_meta["ms_feed_names"][corr]),
+                           ha='center')
                     f.text(0.5, 0.04, 'channel', ha='center')
                     f.text(0.04, 0.5, 'Time (hrs)', va='center', rotation='vertical')
                     f.savefig(output_dir + "/%s-AUTOCORR-FIELD-%s-CORR-%d.png" %

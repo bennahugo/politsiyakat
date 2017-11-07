@@ -24,7 +24,7 @@ os.environ['MPLBACKEND'] = "Agg"
 import argparse
 import logging
 import sys
-from politsiyakat.modules.antenna_tasks import antenna_tasks
+from politsiyakat.modules.flag_tasks import flag_tasks
 import json
 from version import __version__
 import politsiyakat
@@ -89,7 +89,7 @@ def main(argv = None):
     parser.add_argument("task",
                         metavar="task",
                         type=str,
-                        help="Name of task to execute, for example flag_excessive_delay_error")
+                        help="Name of task to execute, for example flag_phase_drifts")
 
     parser.add_argument("kwargs",
                         metavar="kwargs",
@@ -101,7 +101,7 @@ def main(argv = None):
     args = parser.parse_args(argv)
 
     if args.tasksuite == "antenna_mod":
-        run_func = getattr(antenna_tasks, args.task, None)
+        run_func = getattr(flag_tasks, args.task, None)
     else:
         raise RuntimeError("Unknown value for taskset. This is a bug.")
 

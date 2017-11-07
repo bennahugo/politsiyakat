@@ -5,7 +5,7 @@ from progress.bar import FillingCirclesBar
 
 class async_pool:
     def __init__(self, n_ioworkers, n_comworkers, report_progress = True):
-        self.__ppool = ProcessPoolExecutor(max_workers=n_comworkers)
+        self.__ppool = ThreadPoolExecutor(max_workers=n_comworkers)
         self.__iopool = ThreadPoolExecutor(max_workers=n_ioworkers)
         self.__ncomworkers = n_comworkers
         self.__nioworkers = n_ioworkers

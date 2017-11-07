@@ -76,3 +76,15 @@ def uv_dist_per_baseline(no_baselines, nant, antenna_positions):
       bi += 1
     lbound += 1
   return np.sqrt(uv_dist_sq)
+
+def ants_from_baseline(bl, nant):
+  """
+  Given unique baseline index and number of antennae lookup the corresponding
+  antenna indicies (zero-indexed).
+  :param bl: unique baseline index
+  :param nant: number of antennae
+  :return: pair of antenna indicies corresponding to unique index
+  """
+  lmat = np.triu((np.cumsum(np.arange(nant)[None, :] >= np.arange(nant)[:, None]) - 1).reshape([nant, nant]))
+  v = np.argwhere(lmat == bl)
+  return v[0,0], v[0,1]

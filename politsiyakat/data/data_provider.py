@@ -20,7 +20,7 @@ from pyrap.tables import table
 import politsiyakat
 import os
 from politsiyakat.data.misc import *
-from shared_ndarray import SharedNDArray as sha
+
 '''
 Enumeration of stokes and correlations used in MS2.0 - as per Stokes.h in casacore, the rest are left unimplemented:
 These are useful when working with visibility data (https://casa.nrao.edu/Memos/229.html#SECTION000613000000000000000)
@@ -125,7 +125,6 @@ class data_provider:
         self.__nchunk = self.__ms_meta["nchunk"]
         self.__read_exclude = []  # everything by default
         self.__old_read_exclude = []  # everything by default
-        self.__releasehandles = []
         self.__maintable_chunk = self.__alloc_buffer()
         self.__double_buffer = self.__alloc_buffer()
         self.__nxchunk_wkr = None
@@ -165,7 +164,7 @@ class data_provider:
 
     def flush_flags(self):
         """
-            Stores flags to MS
+            Stores flags of current chunk to MS
         """
         with table(self.__ms, readonly=False, ack=False) as t:
             t.putcol("FLAG",
@@ -189,14 +188,10 @@ class data_provider:
         return self
 
     def __exit__(self, type, value, tb):
-        for arr in self.__releasehandles:
-            arr.unlink()
-        self.__releasehandles = []
+        pass
 
     def __del__(self):
-        for arr in self.__releasehandles:
-            arr.unlink()
-        self.__releasehandles = []
+        pass
 
     def next(self):
         if self.__ichunk < self.__nchunk:
@@ -266,39 +261,37 @@ class data_provider:
         }
         with table(self.__ms, readonly=True, ack=False) as t:
             desc = t.getcoldesc("ANTENNA1")
-            a1 = sha(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
+            a1 = np.empty(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
             desc = t.getcoldesc("ANTENNA2")
-            a2 = sha(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
-            baseline = sha(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
+            a2 = np.empty(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
+            baseline = np.empty(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
             desc = t.getcoldesc("FIELD_ID")
-            field = sha(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
+            field = np.empty(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
             desc = t.getcoldesc("FLAG")
-            flag = sha(desc.get("shape",(self.__nrows_chunk,
+            flag = np.empty(desc.get("shape",(self.__nrows_chunk,
                                          self.__ms_meta["nchan"],
                                          self.__ms_meta["ncorr"])), dtype=vtype_map[desc["valueType"]])
             desc = t.getcoldesc("DATA_DESC_ID")
-            ddesc = sha(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
-            spw = sha(desc.get("shape", (self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
+            ddesc = np.empty(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
+            spw = np.empty(desc.get("shape", (self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
             desc = t.getcoldesc(self.__data_column)
-            data = sha(desc.get("shape",(self.__nrows_chunk,
+            data = np.empty(desc.get("shape",(self.__nrows_chunk,
                                          self.__ms_meta["nchan"],
                                          self.__ms_meta["ncorr"])), dtype=vtype_map[desc["valueType"]])
             desc = t.getcoldesc("SCAN_NUMBER")
-            scan = sha(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
+            scan = np.empty(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
             desc = t.getcoldesc("TIME")
-            time = sha(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
-            buf = {'a1': a1.array,
-                   'a2': a2.array,
-                   'baseline': baseline.array,
-                   'field': field.array,
-                   'flag': flag.array,
-                   'desc': ddesc.array,
-                   'data': data.array,
-                   'spw': spw.array,
-                   'scan': scan.array,
-                   'time': time.array}
-            for arr in [a1, a2, baseline, field, flag, ddesc, data, spw, scan, time]:
-                self.__releasehandles.append(arr)
+            time = np.empty(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
+            buf = {'a1': a1,
+                   'a2': a2,
+                   'baseline': baseline,
+                   'field': field,
+                   'flag': flag,
+                   'desc': ddesc,
+                   'data': data,
+                   'spw': spw,
+                   'scan': scan,
+                   'time': time}
             return buf
 
 def _read_buffer(ms,
