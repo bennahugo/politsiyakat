@@ -167,11 +167,12 @@ class data_provider:
             Stores flags of current chunk to MS
         """
         with table(self.__ms, readonly=False, ack=False) as t:
+            rows_to_write = min(t.nrows() - ((self.__ichunk - 1) * self.__nrows_chunk),
+                                self.__nrows_chunk)
             t.putcol("FLAG",
-                     self.__maintable_chunk["flag"],
+                     self.__maintable_chunk["flag"][:rows_to_write],
                      (self.__ichunk - 1) * self.__nrows_chunk,
-                     min(t.nrows() - (self.__ichunk * self.__nrows_chunk),
-                         self.__nrows_chunk))
+                     rows_to_write)
 
     def __len__(self):
         return self.__nchunk
