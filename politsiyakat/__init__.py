@@ -26,7 +26,12 @@ import logging
 import sys
 from politsiyakat.modules.flag_tasks import flag_tasks
 import json
-from version import __version__
+import pkg_resources
+try:
+    __version__ = pkg_resources.require("politsiyakat")[0].version
+except pkg_resources.DistributionNotFound:
+    __version__ = "dev"
+
 import politsiyakat
 from politsiyakat.processing.async_pool import async_pool
 

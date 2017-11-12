@@ -262,27 +262,27 @@ class data_provider:
         }
         with table(self.__ms, readonly=True, ack=False) as t:
             desc = t.getcoldesc("ANTENNA1")
-            a1 = np.empty(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
+            a1 = np.empty((self.__nrows_chunk), dtype=vtype_map[desc["valueType"]])
             desc = t.getcoldesc("ANTENNA2")
-            a2 = np.empty(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
-            baseline = np.empty(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
+            a2 = np.empty((self.__nrows_chunk), dtype=vtype_map[desc["valueType"]])
+            baseline = np.empty((self.__nrows_chunk), dtype=vtype_map[desc["valueType"]])
             desc = t.getcoldesc("FIELD_ID")
-            field = np.empty(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
+            field = np.empty((self.__nrows_chunk), dtype=vtype_map[desc["valueType"]])
             desc = t.getcoldesc("FLAG")
-            flag = np.empty(desc.get("shape",(self.__nrows_chunk,
-                                         self.__ms_meta["nchan"],
-                                         self.__ms_meta["ncorr"])), dtype=vtype_map[desc["valueType"]])
+            flag = np.empty((self.__nrows_chunk,
+                             self.__ms_meta["nchan"],
+                             self.__ms_meta["ncorr"]), dtype=vtype_map[desc["valueType"]])
             desc = t.getcoldesc("DATA_DESC_ID")
-            ddesc = np.empty(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
-            spw = np.empty(desc.get("shape", (self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
+            ddesc = np.empty((self.__nrows_chunk), dtype=vtype_map[desc["valueType"]])
+            spw = np.empty((self.__nrows_chunk), dtype=vtype_map[desc["valueType"]])
             desc = t.getcoldesc(self.__data_column)
-            data = np.empty(desc.get("shape",(self.__nrows_chunk,
-                                         self.__ms_meta["nchan"],
-                                         self.__ms_meta["ncorr"])), dtype=vtype_map[desc["valueType"]])
+            data = np.empty((self.__nrows_chunk,
+                             self.__ms_meta["nchan"],
+                             self.__ms_meta["ncorr"]), dtype=vtype_map[desc["valueType"]])
             desc = t.getcoldesc("SCAN_NUMBER")
-            scan = np.empty(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
+            scan = np.empty((self.__nrows_chunk), dtype=vtype_map[desc["valueType"]])
             desc = t.getcoldesc("TIME")
-            time = np.empty(desc.get("shape",(self.__nrows_chunk)), dtype=vtype_map[desc["valueType"]])
+            time = np.empty((self.__nrows_chunk), dtype=vtype_map[desc["valueType"]])
             buf = {'a1': a1,
                    'a2': a2,
                    'baseline': baseline,

@@ -120,14 +120,14 @@ class flag_tasks:
                              "(key 'baseline_to_group_threshold') as input")
 
         try:
-            dpi = str(kwargs["plot_dpi"])
+            dpi = int(kwargs["plot_dpi"])
         except:
             dpi = 300
             politsiyakat.log.warn("Warning: defaulting to plot dpi of 300. Keyword 'plot_dpi' "
                                   "can be used to control this behaviour.")
 
         try:
-            plt_size = str(kwargs["plot_size"])
+            plt_size = float(kwargs["plot_size"])
         except:
             plt_size = 6
             politsiyakat.log.warn("Warning: defaulting to plot size of 6 units. Keyword 'plot_size' can "
@@ -176,7 +176,7 @@ class flag_tasks:
                     source_rows = np.argwhere(data["field"] == field_id)
                     source_scans = np.unique(data["scan"][source_rows])
                     if source_scans.size == 0:
-                        politsiyakat.log.info("\t\t\tField %s is not present in this chunk" % source_names[field_id])
+                        politsiyakat.log.info("\t\t\tField %s is not present in this chunk" % source_names[field_i])
                         continue
 
                     for s in source_scans:
@@ -218,7 +218,7 @@ class flag_tasks:
                                 max(source_scan_info[field_id][s]["scan_end"], scan_end)
 
                         for spw in xrange(nspw):
-                            epic_name = 'antenna stats for %s' % source_names[field_id]
+                            epic_name = 'antenna stats for %s' % source_names[field_i]
                             for a in xrange(nant):
                                 politsiyakat.pool.submit_to_epic(epic_name,
                                                                  _wk_per_ant_flag_stats,
@@ -264,13 +264,13 @@ class flag_tasks:
                         tot_sel += np.sum(source_scan_info[field_id][s]["tot_rowcount"])
                     if tot_sel != 0:
                         politsiyakat.log.info("\t\t\tField %s is %.2f %% flagged in this chunk" %
-                                              (source_names[field_id],
+                                              (source_names[field_i],
                                                tot_flagged / tot_sel * 100.0))
 
             # Print some stats per field
             politsiyakat.log.info("Summary of flagging statistics per field:")
             for field_i, field_id in enumerate(fields):
-                politsiyakat.log.info("\tField %s has the following scans:" % source_names[field_id])
+                politsiyakat.log.info("\tField %s has the following scans:" % source_names[field_i])
                 for s in source_scan_info[field_id]["scan_list"]:
                     flagged = np.sum(source_scan_info[field_id][s]["tot_flagged"])
                     count = np.sum(source_scan_info[field_id][s]["tot_rowcount"])
@@ -331,7 +331,7 @@ class flag_tasks:
             for field_i, field_id in enumerate(fields):
                 if field_id not in cal_fields:
                     continue
-                politsiyakat.log.info("\tField %s:" % source_names[field_id])
+                politsiyakat.log.info("\tField %s:" % source_names[field_i])
                 for si, s in enumerate(source_scan_info[field_id]["scan_list"]):
                     flg = np.nansum(np.nansum(flg_intra_bl[field_id][si], axis=0),
                                     axis=0)
@@ -343,7 +343,7 @@ class flag_tasks:
             for field_i, field_id in enumerate(fields):
                 if field_id not in cal_fields:
                     continue
-                politsiyakat.log.info("\tField %s:" % source_names[field_id])
+                politsiyakat.log.info("\tField %s:" % source_names[field_i])
                 for si, s in enumerate(source_scan_info[field_id]["scan_list"]):
                     flg = np.nansum(np.nansum(flg_inter_bl[field_id][si], axis=0),
                                     axis=0)
@@ -392,7 +392,7 @@ class flag_tasks:
                 politsiyakat.log.info("\tReading MS")
                 for field_i, field_id in enumerate(source_scan_info.keys()):
                     politsiyakat.log.info("\tSelecting field %s..." %
-                                          source_names[field_id])
+                                          source_names[field_i])
                     has_updated = False
                     for si, s in enumerate(source_scan_info[field_id]["scan_list"]):
                         if chunk_i not in source_scan_info[field_id][s]["chunk_list"]:
@@ -401,7 +401,7 @@ class flag_tasks:
                         flgs = new_flags[field_id][s].copy()
                         politsiyakat.log.info("\t\tUpdating flags for scan %d" % s)
                         # per antenna, all spw one go
-                        epic_name = 'baseline flag update for %s' % source_names[field_id]
+                        epic_name = 'baseline flag update for %s' % source_names[field_i]
                         for bl in xrange(no_baselines):
                             politsiyakat.pool.submit_to_epic(epic_name,
                                                              _wk_per_bl_update,
@@ -428,7 +428,7 @@ class flag_tasks:
             for field_i, field_id in enumerate(fields):
                 if field_id not in cal_fields:
                     continue
-                politsiyakat.log.info("\tField %s:" % source_names[field_id])
+                politsiyakat.log.info("\tField %s:" % source_names[field_i])
                 noplots = len(source_scan_info[field_id]["scan_list"])
                 nxplts = int(np.ceil(np.sqrt(noplots)))
                 nyplts = int(np.ceil(noplots / float(nxplts)))
@@ -451,12 +451,12 @@ class flag_tasks:
                     axarr[si // nxplts, si % nxplts].set_title("scan %d" % s)
                     leg = axarr[si // nxplts, si % nxplts].legend()
                     leg.get_frame().set_alpha(0.5)
-                f.text(0.0, 0.94, "FIELD: %s" % source_names[field_id], ha='left')
+                f.text(0.0, 0.94, "FIELD: %s" % source_names[field_i], ha='left')
                 f.text(0.5, 0.04, 'UVdist (m)', ha='center')
                 f.text(0.04, 0.5, 'Number of channels flagged', va='center', rotation='vertical')
                 f.savefig(output_dir + "/%s-FLAGGED_PHASE_UVDIST.CALFIELD_%s.png" %
                             (os.path.basename(ms),
-                             source_names[field_id]))
+                             source_names[field_i]))
                 plt.close(f)
 
             # Create phase waterfall plots
@@ -490,7 +490,7 @@ class flag_tasks:
                 for bl in xrange(no_baselines):
                     politsiyakat.pool.submit_to_epic("waterfall plots",
                                                      _wkr_bl_corr_regrid,
-                                                     source_names[field_id],
+                                                     source_names[field_i],
                                                      field_i,
                                                      ncorr,
                                                      nchan,
@@ -533,13 +533,13 @@ class flag_tasks:
                         a2n = antnames[a2]
                         axarr[bl // nxplts, bl % nxplts].set_title("%s & %s" % (a1n, a2n))
                     f.text(0.5, 0.94,
-                           "FIELD: %s, CORR: %s" % (source_names[field_id], ms_meta["ms_feed_names"][corr]),
+                           "FIELD: %s, CORR: %s" % (source_names[field_i], ms_meta["ms_feed_names"][corr]),
                            ha='center')
                     f.text(0.5, 0.04, 'channel', ha='center')
                     f.text(0.04, 0.5, 'Time (hrs)', va='center', rotation='vertical')
                     f.savefig(output_dir + "/%s-PHASE-FIELD-%s-CORR-%d.png" %
                               (os.path.basename(ms),
-                               source_names[field_id],
+                               source_names[field_i],
                                corr))
                     plt.close(f)
             politsiyakat.log.info("\t\t Saved to %s" % output_dir)
@@ -628,14 +628,14 @@ class flag_tasks:
                              "(key 'antenna_to_group_threshold') as input")
 
         try:
-            dpi = str(kwargs["plot_dpi"])
+            dpi = float(kwargs["plot_dpi"])
         except:
             dpi = 300
             politsiyakat.log.warn("Warning: defaulting to plot dpi of 300. Keyword 'plot_dpi' "
                                   "can be used to control this behaviour.")
 
         try:
-            plt_size = str(kwargs["plot_size"])
+            plt_size = float(kwargs["plot_size"])
         except:
             plt_size = 6
             politsiyakat.log.warn("Warning: defaulting to plot size of 6 units. Keyword 'plot_size' can "
@@ -682,7 +682,7 @@ class flag_tasks:
                     source_rows = np.argwhere(data["field"] == field_id)
                     source_scans = np.unique(data["scan"][source_rows])
                     if source_scans.size == 0:
-                        politsiyakat.log.info("\t\t\tField %s is not present in this chunk" % source_names[field_id])
+                        politsiyakat.log.info("\t\t\tField %s is not present in this chunk" % source_names[field_i])
                         continue
 
                     for s in source_scans:
@@ -718,7 +718,7 @@ class flag_tasks:
                                 max(source_scan_info[field_id][s]["scan_end"], scan_end)
 
                         for spw in xrange(nspw):
-                            epic_name = 'antenna stats for %s' % source_names[field_id]
+                            epic_name = 'antenna stats for %s' % source_names[field_i]
                             for a in xrange(nant):
                                 politsiyakat.pool.submit_to_epic(epic_name,
                                                                  _wk_per_ant_stats,
@@ -752,13 +752,13 @@ class flag_tasks:
                         tot_sel += np.sum(source_scan_info[field_id][s]["tot_rowcount"])
                     if tot_sel != 0:
                         politsiyakat.log.info("\t\t\tField %s is %.2f %% flagged in this chunk" %
-                                              (source_names[field_id],
+                                              (source_names[field_i],
                                                tot_flagged / tot_sel * 100.0))
 
             # Print some stats per field
             politsiyakat.log.info("Summary of flagging statistics per field:")
             for field_i, field_id in enumerate(fields):
-                politsiyakat.log.info("\tField %s has the following scans:" % source_names[field_id])
+                politsiyakat.log.info("\tField %s has the following scans:" % source_names[field_i])
                 for s in source_scan_info[field_id]["scan_list"]:
                     flagged = np.sum(source_scan_info[field_id][s]["tot_flagged"])
                     count = np.sum(source_scan_info[field_id][s]["tot_rowcount"])
@@ -816,7 +816,7 @@ class flag_tasks:
             # Print new intra antanna flagging statistics
             politsiyakat.log.info("Resulting intra-antenna scan flagging based on autocorraltion amplitude:")
             for field_i, field_id in enumerate(fields):
-                politsiyakat.log.info("\tField %s:" % source_names[field_id])
+                politsiyakat.log.info("\tField %s:" % source_names[field_i])
                 for ant in xrange(nant):
                     politsiyakat.log.info("\t\tAntenna %s:" % antnames[ant])
                     for si, s in enumerate(source_scan_info[field_id]["scan_list"]):
@@ -830,7 +830,7 @@ class flag_tasks:
             politsiyakat.log.info(
                 "Resulting inter-antenna scan flagging based on autocorraltion amplitude:")
             for field_i, field_id in enumerate(fields):
-                politsiyakat.log.info("\tField %s:" % source_names[field_id])
+                politsiyakat.log.info("\tField %s:" % source_names[field_i])
                 for ant in xrange(nant):
                     politsiyakat.log.info("\t\tAntenna %s:" % antnames[ant])
                     for si, s in enumerate(source_scan_info[field_id]["scan_list"]):
@@ -849,7 +849,7 @@ class flag_tasks:
                 politsiyakat.log.info("\tReading MS")
                 for field_i, field_id in enumerate(source_scan_info.keys()):
                     politsiyakat.log.info("\tSelecting field %s..." %
-                                          source_names[field_id])
+                                          source_names[field_i])
                     has_updated = False
                     for si, s in enumerate(source_scan_info[field_id]["scan_list"]):
                         if chunk_i not in source_scan_info[field_id][s]["chunk_list"]:
@@ -857,7 +857,7 @@ class flag_tasks:
                         has_updated = True
                         politsiyakat.log.info("\t\tUpdating flags for scan %d" % s)
                         # per antenna, all spw one go
-                        epic_name = 'antenna flag update for %s' % source_names[field_id]
+                        epic_name = 'antenna flag update for %s' % source_names[field_i]
                         for a in xrange(nant):
                             politsiyakat.pool.submit_to_epic(epic_name,
                                                              _wk_per_ant_update,
@@ -908,7 +908,7 @@ class flag_tasks:
                 for ant in xrange(nant):
                     politsiyakat.pool.submit_to_epic("waterfall plots",
                                                      _wkr_ant_corr_regrid,
-                                                     source_names[field_id],
+                                                     source_names[field_i],
                                                      field_i,
                                                      ncorr,
                                                      nchan,
@@ -949,13 +949,13 @@ class flag_tasks:
                         plt.colorbar(im, ax = axarr[ant // nxplts, ant % nxplts])
                         axarr[ant // nxplts, ant % nxplts].set_title(antnames[ant])
                     f.text(0.5, 0.94,
-                           "FIELD: %s, CORR: %s" % (source_names[field_id], ms_meta["ms_feed_names"][corr]),
+                           "FIELD: %s, CORR: %s (dB-scale)" % (source_names[field_i], ms_meta["ms_feed_names"][corr]),
                            ha='center')
                     f.text(0.5, 0.04, 'channel', ha='center')
                     f.text(0.04, 0.5, 'Time (hrs)', va='center', rotation='vertical')
                     f.savefig(output_dir + "/%s-AUTOCORR-FIELD-%s-CORR-%d.png" %
                                 (os.path.basename(ms),
-                                 source_names[field_id],
+                                 source_names[field_i],
                                  corr))
                     plt.close(f)
             politsiyakat.log.info("\t\t Saved to %s" % output_dir)
