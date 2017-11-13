@@ -524,7 +524,7 @@ class flag_tasks:
                             z,
                             aspect='auto',
                             extent=[0, nchan * nspw,
-                                    0, (obs_end - obs_start) / 3600.0],
+                                    0, (obs_end - obs_start)],
                             vmin=scale_min,
                             vmax=scale_max)
                         plt.colorbar(im, ax=axarr[bl // nxplts, bl % nxplts])
@@ -943,7 +943,7 @@ class flag_tasks:
                             dbscale,
                             aspect = 'auto',
                             extent = [0, nchan * nspw,
-                                      0, (obs_end - obs_start) / 3600.0],
+                                      0, (obs_end - obs_start)],
                             vmin = scale_min,
                             vmax = scale_max)
                         plt.colorbar(im, ax = axarr[ant // nxplts, ant % nxplts])
@@ -1162,7 +1162,7 @@ def _wkr_ant_corr_regrid(field_name,
                          heatmaps,
                          ant):
     for corr in xrange(ncorr):
-        X, Y = np.linspace(0.0, float(obs_end - obs_start), 512), \
+        X, Y = np.linspace(0.0, float(obs_end - obs_start) / 3600.0, 512), \
                np.arange(nchan * nspw)
         xcoords = np.repeat(scan_mid / 3600.0, nchan * nspw)
         ycoords = np.tile(np.arange(nchan * nspw),
@@ -1188,7 +1188,7 @@ def _wkr_bl_corr_regrid(field_name,
                         bl):
 
     for corr in xrange(ncorr):
-        X, Y = np.linspace(0.0, float(obs_end - obs_start), 128), \
+        X, Y = np.linspace(0.0, float(obs_end - obs_start) / 3600.0, 128), \
                np.arange(nchan * nspw)
         xcoords = np.repeat(scan_mid / 3600.0, nchan * nspw)
         ycoords = np.tile(np.arange(nchan * nspw),
