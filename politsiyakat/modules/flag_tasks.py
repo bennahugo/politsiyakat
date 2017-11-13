@@ -1164,7 +1164,7 @@ def _wkr_ant_corr_regrid(field_name,
     for corr in xrange(ncorr):
         X, Y = np.linspace(0.0, float(obs_end - obs_start), 512), \
                np.arange(nchan * nspw)
-        xcoords = np.repeat(scan_mid, nchan * nspw)
+        xcoords = np.repeat(scan_mid / 3600.0, nchan * nspw)
         ycoords = np.tile(np.arange(nchan * nspw),
                           [1, famp[field_i].shape[0]]).flatten()
         heatmap = interp.griddata((xcoords,
@@ -1190,7 +1190,7 @@ def _wkr_bl_corr_regrid(field_name,
     for corr in xrange(ncorr):
         X, Y = np.linspace(0.0, float(obs_end - obs_start), 128), \
                np.arange(nchan * nspw)
-        xcoords = np.repeat(scan_mid, nchan * nspw)
+        xcoords = np.repeat(scan_mid / 3600.0, nchan * nspw)
         ycoords = np.tile(np.arange(nchan * nspw),
                           [1, fph[field_i].shape[0]]).flatten()
         heatmap = interp.griddata((xcoords,
