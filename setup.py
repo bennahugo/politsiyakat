@@ -24,7 +24,7 @@ from setuptools import setup
 
 pkg='politsiyakat'
 
-__version__ = "0.3.6"
+__version__ = "0.3.8"
 
 build_root=os.path.dirname(__file__)
 
