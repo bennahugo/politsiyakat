@@ -410,7 +410,9 @@ class flag_tasks:
                                                              s,
                                                              si,
                                                              data,
-                                                             flgs)
+                                                             flgs,
+                                                             nspw,
+                                                             nchan)
                         politsiyakat.pool.collect_epic(epic_name)
                     if not has_updated:
                         politsiyakat.log.info("\t\tNothing to be done for this field")
@@ -524,9 +526,10 @@ class flag_tasks:
                             z,
                             aspect='auto',
                             extent=[0, nchan * nspw,
-                                    0, (obs_end - obs_start)],
+                                    (obs_end - obs_start) / 3600, 0],
                             vmin=scale_min,
-                            vmax=scale_max)
+                            vmax=scale_max,
+                            cmap = "gist_rainbow")
                         plt.colorbar(im, ax=axarr[bl // nxplts, bl % nxplts])
                         a1, a2 = ants_from_baseline(bl,nant)
                         a1n = antnames[a1]
@@ -745,6 +748,7 @@ class flag_tasks:
                                         totflagged
                                     source_scan_info[field_id][s]["tot_rowcount"][ant, spw * nchan:(spw + 1) * nchan, :] += \
                                         totrowcount
+
                     tot_flagged = 0
                     tot_sel = 0
                     for s in source_scans:
@@ -867,7 +871,9 @@ class flag_tasks:
                                                              si,
                                                              data,
                                                              field_scan_flags_intra,
-                                                             field_scan_flags_inter)
+                                                             field_scan_flags_inter,
+                                                             nspw,
+                                                             nchan)
                         politsiyakat.pool.collect_epic(epic_name)
                     if not has_updated:
                         politsiyakat.log.info("\t\tNothing to be done for this field")
@@ -921,7 +927,7 @@ class flag_tasks:
                                                      heatmaps,
                                                      ant)
                 politsiyakat.pool.collect_epic("waterfall plots")
-                politsiyakat.log.info("\t\t Done...")
+                politsiyakat.log.info("\t\t %s Done..." % source_names[field_i])
                 for corr in xrange(ncorr):
                     nxplts = int(np.ceil(np.sqrt(nant)))
                     nyplts = int(np.ceil(nant / float(nxplts)))
@@ -943,9 +949,10 @@ class flag_tasks:
                             dbscale,
                             aspect = 'auto',
                             extent = [0, nchan * nspw,
-                                      0, (obs_end - obs_start)],
+                                      (obs_end - obs_start) / 3600, 0],
                             vmin = scale_min,
-                            vmax = scale_max)
+                            vmax = scale_max,
+                            cmap = "gist_rainbow")
                         plt.colorbar(im, ax = axarr[ant // nxplts, ant % nxplts])
                         axarr[ant // nxplts, ant % nxplts].set_title(antnames[ant])
                     f.text(0.5, 0.94,
@@ -970,7 +977,9 @@ def _wk_per_ant_update(a,
                        si,
                        data,
                        field_scan_flags_intra,
-                       field_scan_flags_inter):
+                       field_scan_flags_inter,
+                       nspw,
+                       nchan):
     nrow_per_chunk = 100
     nchunks = int(np.ceil(data["data"].shape[0] / float(nrow_per_chunk)))
     for n in xrange(nchunks):
@@ -982,18 +991,23 @@ def _wk_per_ant_update(a,
         ant_sel = np.logical_or(data["a1"][chunk_start:chunk_end] == a,
                                 data["a2"][chunk_start:chunk_end] == a)
         accum_sel = np.logical_and(scan_sel, ant_sel)
-        newf = np.logical_or(field_scan_flags_intra[field_id][si][a],
-                             field_scan_flags_inter[field_id][si][a])
-        data["flag"][np.argwhere(accum_sel)][chunk_start:chunk_end] = \
-            np.logical_or(data["flag"][np.argwhere(accum_sel)][chunk_start:chunk_end],
-                          newf)
+        for spwi in xrange(nspw):
+            spwsel = data["spw"][chunk_start:chunk_end] == spwi
+            accum_sel = np.logical_and(accum_sel, spwsel)
+            newf = np.logical_or(field_scan_flags_intra[field_id][si][a][spwi * nchan: nchan * (spwi + 1), :],
+                                 field_scan_flags_inter[field_id][si][a][spwi * nchan: nchan * (spwi + 1), :])
+            data["flag"][np.argwhere(accum_sel)][chunk_start:chunk_end] = \
+                np.logical_or(data["flag"][np.argwhere(accum_sel)][chunk_start:chunk_end],
+                              newf)
 
 def _wk_per_bl_update(bl,
                       field_id,
                       s,
                       si,
                       data,
-                      flgs):
+                      flgs,
+                      nspw,
+                      nchan):
 
     nrow_per_chunk = 100
     nchunks = int(np.ceil(data["data"].shape[0] / float(nrow_per_chunk)))
@@ -1005,9 +1019,12 @@ def _wk_per_bl_update(bl,
         scan_sel = data["scan"][chunk_start:chunk_end] == s
         bl_sel = data["baseline"][chunk_start:chunk_end] == bl
         accum_sel = np.logical_and(scan_sel, bl_sel)
-        data["flag"][np.argwhere(accum_sel)][chunk_start:chunk_end] = \
-            np.logical_or(data["flag"][np.argwhere(accum_sel)][chunk_start:chunk_end],
-                          flgs[bl])
+        for spwi in xrange(nspw):
+            spwsel = data["spw"][chunk_start:chunk_end] == spwi
+            accum_sel = np.logical_and(accum_sel, spwsel)
+            data["flag"][np.argwhere(accum_sel)][chunk_start:chunk_end] = \
+                np.logical_or(data["flag"][np.argwhere(accum_sel)][chunk_start:chunk_end],
+                              flgs[bl][spwi * nchan: nchan * (spwi + 1), :])
 
 
 def _wk_per_ant_flag_stats(a,
@@ -1116,7 +1133,6 @@ def _wk_per_ant_stats(a,
                              np.logical_and(np.logical_not(data["flag"][chunk_start:chunk_end]),
                                             np.tile(autocorrs_sel,
                                                     (ncorr, nchan, 1)).T))
-
 
         dn = data["data"][chunk_start:chunk_end].copy()
         dn[np.logical_not(sel)] = np.nan

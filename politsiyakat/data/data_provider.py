@@ -150,7 +150,7 @@ class data_provider:
         """
         if self.__maintable_chunk is not None:
             return {'a1': self.__maintable_chunk['a1'][:self.__rows_read],
-                    'a2': self.__maintable_chunk['a1'][:self.__rows_read],
+                    'a2': self.__maintable_chunk['a2'][:self.__rows_read],
                     'baseline': self.__maintable_chunk['baseline'][:self.__rows_read],
                     'field': self.__maintable_chunk['field'][:self.__rows_read],
                     'flag': self.__maintable_chunk['flag'][:self.__rows_read],
