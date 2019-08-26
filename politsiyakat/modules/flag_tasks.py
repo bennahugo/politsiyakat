@@ -397,6 +397,8 @@ class flag_tasks:
                     for si, s in enumerate(source_scan_info[field_id]["scan_list"]):
                         if chunk_i not in source_scan_info[field_id][s]["chunk_list"]:
                             continue
+                        if s not in new_flags[field_id]: #scan is not in apply_groups, skip
+                            continue
                         has_updated = True
                         flgs = new_flags[field_id][s].copy()
                         politsiyakat.log.info("\t\tUpdating flags for scan %d" % s)

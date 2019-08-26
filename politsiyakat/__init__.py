@@ -26,6 +26,7 @@ import logging
 import sys
 from politsiyakat.modules.flag_tasks import flag_tasks
 import json
+from datetime import datetime
 import pkg_resources
 try:
     __version__ = pkg_resources.require("politsiyakat")[0].version
@@ -41,10 +42,17 @@ __install_path = os.path.split(os.path.abspath(politsiyakat.__file__))[0]
 
 def create_logger():
     """ Creates a logger for this module """
-
-    logging.basicConfig(format="%(name)s - %(levelname)s %(asctime)s:\t%(message)s")
-    logging.StreamHandler(sys.stdout)
+    cfmt = logging.Formatter('%(name)s - %(asctime)s %(levelname)s - %(message)s')
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(cfmt)
+    now = datetime.now()
+    logname = "politsiyakat.{0:s}.log".format(now.strftime("%m.%d.%Y_%H.%M.%S"))
+    file_handler = logging.FileHandler(logname)
+    file_handler.setFormatter(cfmt)
     politsiya_log = logging.getLogger("politsiyakat")
+    politsiya_log.addHandler(stream_handler)
+    politsiya_log.info("Your log file will be available at {0:s}".format(logname))
+    politsiya_log.addHandler(file_handler)
     politsiya_log.setLevel(logging.INFO)
     return politsiya_log
 
